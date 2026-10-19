@@ -83,7 +83,7 @@ class RuleScorer:
         self.request_delay = float(config.get("request_delay", 0.0))
         # 全局关闭进度条，避免多线程刷新干扰；如需打开可传入 disable_progress=False
         if disable_progress is None:
-            self._disable_tqdm = True
+            self._disable_tqdm = False
         else:
             self._disable_tqdm = bool(disable_progress)
         # thinking tri-state:
