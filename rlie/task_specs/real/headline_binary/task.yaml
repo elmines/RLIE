@@ -7,3 +7,6 @@ val_data_path: ./headline_binary_test.json
 test_data_path: ./headline_binary_test.json
 ood_data_path: ./headline_binary_ood.json
 prompts_path: ./prompts.yaml
+bert_input:
+  # Encoded as [CLS] headline_1 [SEP] headline_2 [SEP]
+  fields: [headline_1, headline_2]

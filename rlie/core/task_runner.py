@@ -37,11 +37,54 @@ from rlie.core.rule_utils import (
 )
 from rlie.utils import eval_utils
 from rlie import run_eval_only
+from rlie.bert.pipeline import build_mlp_bank, regression_feature_matrices, resolve_feature_mode
 
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
 LOGGER = logging.getLogger("rlie")
 
+
+
+def _capture_rule_store(
+    feature_store,
+    train_df,
+    val_df,
+    train_matrix,
+    val_matrix,
+    *,
+    use_model_features: bool,
+):
+    """Store the feature matrix the logistic model was fit on.
+
+    The live feature store keeps the LLM ternary labels so later rounds can
+    still measure coverage and train new rule MLPs. When BERT-MLP mode is on,
+    the snapshot instead keeps the continuous MLP scores.
+    """
+    if not use_model_features:
+        train_features = (
+            feature_store.features.copy()
+            if feature_store.features.size > 0
+            else np.zeros((0, len(train_df)))
+        )
+        val_features = (
+            feature_store.val_features.copy()
+            if feature_store.val_features.size > 0
+            else np.zeros((0, len(val_df)))
+        )
+    else:
+        if train_matrix is None or np.asarray(train_matrix).size == 0:
+            train_features = np.zeros((0, len(train_df)), dtype=float)
+        else:
+            train_features = np.asarray(train_matrix, dtype=float).T.copy()
+        if val_matrix is None or np.asarray(val_matrix).size == 0:
+            val_features = np.zeros((0, len(val_df)), dtype=float)
+        else:
+            val_features = np.asarray(val_matrix, dtype=float).T.copy()
+    return {
+        "rules": copy.deepcopy(feature_store.rules),
+        "train_features": train_features,
+        "val_features": val_features,
+    }
 
 
 def _set_global_info_enabled(enabled: bool) -> None:
@@ -177,6 +220,15 @@ def run_single_task(
         label_column=data_loader.task.label_name,
         val_samples=val_df if len(val_df) > 0 else None,
     )
+    feature_mode = resolve_feature_mode(config)
+    mlp_bank = build_mlp_bank(
+        config,
+        task=data_loader.task,
+        task_root=task_name or config.get("data_root") or "",
+        train_df=train_df,
+        val_df=val_df,
+    )
+    LOGGER.info("[%s] Feature mode: %s", task_name or "default", feature_mode)
     trainer = SoftmaxTrainer(config)
     convergence = ConvergenceMonitor(config)
     rule_cap_value = config.get("max_rules")
@@ -295,12 +347,14 @@ def run_single_task(
             max_rules,
         )
 
-    features = feature_store.to_sample_feature_matrix()
+    features, val_features = regression_feature_matrices(feature_store, mlp_bank)
+    feature_desc = "BERT-MLP scores in [-1, 1]" if mlp_bank is not None else "LLM ternary scores"
     LOGGER.info(
-        "Round %d: training logistic regression on %d samples x %d rules",
+        "Round %d: training logistic regression on %d samples x %d rules (%s)",
         round_idx,
         features.shape[0],
         features.shape[1],
+        feature_desc,
     )
     result = trainer.train(features, train_labels)
     LOGGER.info(
@@ -322,7 +376,6 @@ def run_single_task(
     LOGGER.info("Round %d average confidence delta %.4f", round_idx, avg_delta)
 
     if len(val_df) > 0:
-        val_features = feature_store.to_sample_feature_matrix("val")
         val_probs = result.model.predict_proba(val_features)[:, 1]
         val_preds = (val_probs >= 0.5).astype(int)
         val_accuracy, val_f1 = compute_accuracy_and_macro_f1(
@@ -371,15 +424,14 @@ def run_single_task(
                 "accuracy": val_accuracy,
                 "f1": val_f1,
             },
-            "rule_store": {
-                "rules": copy.deepcopy(feature_store.rules),
-                "train_features": feature_store.features.copy()
-                if feature_store.features.size > 0
-                else np.zeros((0, len(train_df))),
-                "val_features": feature_store.val_features.copy()
-                if feature_store.val_features.size > 0
-                else np.zeros((0, len(val_df))),
-            },
+            "rule_store": _capture_rule_store(
+                feature_store,
+                train_df,
+                val_df,
+                features,
+                val_features,
+                use_model_features=mlp_bank is not None,
+            ),
             "metric_value": current_metric,
         }
         LOGGER.info(
@@ -411,15 +463,16 @@ def run_single_task(
     train_csv_path = os.path.join(dataset_dir, f"round_{round_idx}_train_dataset.csv")
     save_dataset_csv(features, train_label_list, train_csv_path)
     if len(val_df) > 0:
-        val_features_matrix = feature_store.to_sample_feature_matrix("val")
         val_csv_path = os.path.join(dataset_dir, f"round_{round_idx}_val_dataset.csv")
-        save_dataset_csv(val_features_matrix, val_label_list, val_csv_path)
+        save_dataset_csv(val_features, val_label_list, val_csv_path)
     save_rule_snapshot(
         round_idx,
         feature_store,
         result.model,
         dataset_dir,
     )
+    if mlp_bank is not None:
+        mlp_bank.save_round(round_idx, dataset_dir, feature_store.rules)
 
     while True:
         round_idx += 1
@@ -551,12 +604,14 @@ def run_single_task(
                 max_rules,
             )
 
-        features = feature_store.to_sample_feature_matrix()
+        features, val_features = regression_feature_matrices(feature_store, mlp_bank)
+        feature_desc = "BERT-MLP scores in [-1, 1]" if mlp_bank is not None else "LLM ternary scores"
         LOGGER.info(
-            "Round %d: training logistic regression on %d samples x %d rules",
+            "Round %d: training logistic regression on %d samples x %d rules (%s)",
             round_idx,
             features.shape[0],
             features.shape[1],
+            feature_desc,
         )
         result = trainer.train(features, train_labels)
         avg_delta = convergence.compute_confidence_delta(result.probabilities, train_labels)
@@ -582,7 +637,6 @@ def run_single_task(
         )
 
         if len(val_df) > 0:
-            val_features = feature_store.to_sample_feature_matrix("val")
             val_probs = result.model.predict_proba(val_features)[:, 1]
             val_preds = (val_probs >= 0.5).astype(int)
             val_accuracy, val_f1 = compute_accuracy_and_macro_f1(
@@ -629,15 +683,14 @@ def run_single_task(
                     "accuracy": val_accuracy,
                     "f1": val_f1,
                 },
-                "rule_store": {
-                    "rules": copy.deepcopy(feature_store.rules),
-                    "train_features": feature_store.features.copy()
-                    if feature_store.features.size > 0
-                    else np.zeros((0, len(train_df))),
-                    "val_features": feature_store.val_features.copy()
-                    if feature_store.val_features.size > 0
-                    else np.zeros((0, len(val_df))),
-                },
+                "rule_store": _capture_rule_store(
+                    feature_store,
+                    train_df,
+                    val_df,
+                    features,
+                    val_features,
+                    use_model_features=mlp_bank is not None,
+                ),
                 "metric_value": current_metric,
             }
             LOGGER.info(
@@ -668,15 +721,16 @@ def run_single_task(
         train_csv_path = os.path.join(dataset_dir, f"round_{round_idx}_train_dataset.csv")
         save_dataset_csv(features, train_label_list, train_csv_path)
         if len(val_df) > 0:
-            val_features_matrix = feature_store.to_sample_feature_matrix("val")
             val_csv_path = os.path.join(dataset_dir, f"round_{round_idx}_val_dataset.csv")
-            save_dataset_csv(val_features_matrix, val_label_list, val_csv_path)
+            save_dataset_csv(val_features, val_label_list, val_csv_path)
         save_rule_snapshot(
             round_idx,
             feature_store,
             result.model,
             dataset_dir,
         )
+        if mlp_bank is not None:
+            mlp_bank.save_round(round_idx, dataset_dir, feature_store.rules)
 
     if best_snapshot is None:
         LOGGER.warning("未找到有效的验证集指标，使用最后一轮模型作为最佳模型")
@@ -698,15 +752,14 @@ def run_single_task(
                 "accuracy": float("nan"),
                 "f1": float("nan"),
             },
-            "rule_store": {
-                "rules": copy.deepcopy(feature_store.rules),
-                "train_features": feature_store.features.copy()
-                if feature_store.features.size > 0
-                else np.zeros((0, len(train_df))),
-                "val_features": feature_store.val_features.copy()
-                if feature_store.val_features.size > 0
-                else np.zeros((0, len(val_df))),
-            },
+            "rule_store": _capture_rule_store(
+                feature_store,
+                train_df,
+                val_df,
+                features,
+                val_features,
+                use_model_features=mlp_bank is not None,
+            ),
             "metric_value": float("nan"),
         }
         best_metric_value = float("nan")
@@ -782,10 +835,17 @@ def run_single_task(
             "value": best_snapshot.get("metric_value", float("nan")),
         },
     }
+    summary_payload["feature_mode"] = feature_mode
     summary_payload["rule_snapshot_dir"] = os.path.join(
         config["logging"]["output_dir"],
         "rule_snapshots",
     )
+    if mlp_bank is not None:
+        summary_payload["rule_mlp_dir"] = os.path.join(
+            config["logging"]["output_dir"],
+            "rule_mlps",
+            f"round_{int(best_round):02d}",
+        )
     save_json(
         os.path.join(config["logging"]["output_dir"], "final_round_metrics.json"),
         summary_payload,

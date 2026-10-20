@@ -17,6 +17,31 @@ rule_coverage_threshold: 0.2
 model_selection_metric: acc
 best_model_metric: acc
 
+# llm: original pipeline. LLM ternary scores are the logistic-regression features.
+# bert_mlp: train one MLP per rule on precomputed BERT [CLS] embeddings to imitate
+# those ternary scores, then feed the continuous MLP outputs in [-1, 1] to
+# logistic regression. Embed first with: python -m rlie.bert --config configs/default.yaml
+feature_mode: llm
+
+bert:
+  embeddings_dir: embeddings
+  model_name: bert-base-uncased
+  max_length: 512
+  batch_size: 16
+  device: cuda:0
+  # Rule MLPs run here. Point this at a GPU that is not serving the LLM.
+  mlp_device: cuda:0
+  mlp:
+    hidden_dims: [128]
+    dropout: 0.1
+    learning_rate: 0.001
+    weight_decay: 0.0001
+    batch_size: 64
+    max_epochs: 50
+    patience: 5
+    min_delta: 0.0001
+    metric: mse
+
 evaluation:
   modes: regression_only
 

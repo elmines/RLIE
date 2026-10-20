@@ -35,6 +35,7 @@ explicit = true
 [project.scripts]
 rlie-train = "rlie.main:main"
 rlie-eval = "rlie.run_eval_only:main"
+rlie-embed = "rlie.bert.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["rlie*"]

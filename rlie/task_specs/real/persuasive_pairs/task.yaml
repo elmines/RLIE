@@ -5,3 +5,6 @@ val_data_path: ./persuasive_pairs_human_gt_ind_val.json
 test_data_path: ./persuasive_pairs_human_gt_ind_test.json
 ood_data_path: ./persuasive_pairs_human_gt_ood.json
 prompts_path: ./prompts.yaml
+bert_input:
+  # Encoded as [CLS] argument_1 [SEP] argument_2 [SEP]
+  fields: [argument_1, argument_2]

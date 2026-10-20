@@ -32,6 +32,7 @@ from rlie.utils.eval_utils import (
 from rlie.datasets.labels import map_labels
 from rlie.llm.rule_scorer import RuleScorer
 from rlie.core.metrics import compute_accuracy_and_macro_f1
+from rlie.bert.pipeline import resolve_feature_mode
 
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
@@ -228,25 +229,43 @@ def run_eval_only(
         )
         evaluation_model_cfgs.append((model_name, per_model_cfg))
 
-    # 实验 A：只使用第一个评估模型重算回归特征 + 基线
-    regression_results: Dict[str, Dict[str, float]] = {}
-    if evaluation_model_cfgs:
-        # 只运行第一个评估模型
-        model_name, cfg = evaluation_model_cfgs[0]
-        LOGGER.info("实验A：回归重打分 - 只运行第一个评估模型: %s", model_name)
+    feature_mode = resolve_feature_mode(raw_config)
+    bert_test_features = None
+    if feature_mode == "bert_mlp":
+        from rlie.bert.mlp import predict_saved_mlp_features
 
-        checker = RuleScorer(
-            cfg,
-            prompt,
-            data_loader.label_mapping,
-            label_values=getattr(data_loader, "label_values", None),
-            disable_progress=True,
+        mlp_dir = os.path.join(run_dir, "rule_mlps", f"round_{int(best_round):02d}")
+        LOGGER.info("实验A：使用 BERT MLP 连续特征 %s", mlp_dir)
+        bert_test_features = predict_saved_mlp_features(
+            config=raw_config,
+            task=data_loader.task,
+            task_root=task_root,
+            frame=test_df,
+            mlp_dir=mlp_dir,
+            rule_texts=rule_texts,
         )
-        rule_vectors = checker.batch_score(rule_texts, test_df, labels=test_label_list)
-        feature_matrix = np.array(rule_vectors, dtype=int).T if rule_vectors else np.zeros(
-            (len(test_df), len(rule_texts)),
-            dtype=int,
-        )
+
+    # 实验 A：回归特征 + 基线。bert_mlp 用已保存的 MLP；否则用第一个评估模型重打分。
+    regression_results: Dict[str, Dict[str, float]] = {}
+    if bert_test_features is not None or evaluation_model_cfgs:
+        if bert_test_features is not None:
+            model_name = "bert_mlp"
+            feature_matrix = bert_test_features
+        else:
+            model_name, cfg = evaluation_model_cfgs[0]
+            LOGGER.info("实验A：回归重打分 - 只运行第一个评估模型: %s", model_name)
+            checker = RuleScorer(
+                cfg,
+                prompt,
+                data_loader.label_mapping,
+                label_values=getattr(data_loader, "label_values", None),
+                disable_progress=True,
+            )
+            rule_vectors = checker.batch_score(rule_texts, test_df, labels=test_label_list)
+            feature_matrix = np.array(rule_vectors, dtype=int).T if rule_vectors else np.zeros(
+                (len(test_df), len(rule_texts)),
+                dtype=int,
+            )
         acc_reg, f1_reg, _ = _evaluate_regression(
             feature_matrix,
             weights,
@@ -288,20 +307,24 @@ def run_eval_only(
             "experiment_B": {},
         }
 
-    # 基准特征/预测：第一个评估模型重打分（供 LR/Label 两个策略使用）
-    base_model_name, base_cfg = evaluation_model_cfgs[0]
-    base_checker = RuleScorer(
-        base_cfg,
-        prompt,
-        data_loader.label_mapping,
-        label_values=getattr(data_loader, "label_values", None),
-        disable_progress=True,
-    )
-    base_vectors = base_checker.batch_score(rule_texts, test_df, labels=test_label_list)
-    base_features = np.array(base_vectors, dtype=int).T if base_vectors else np.zeros(
-        (len(test_df), len(rule_texts)),
-        dtype=int,
-    )
+    # 基准特征/预测：BERT MLP 连续分数，或第一个评估模型重打分（供 LR/Label 策略使用）
+    if bert_test_features is not None:
+        base_model_name = "bert_mlp"
+        base_features = bert_test_features
+    else:
+        base_model_name, base_cfg = evaluation_model_cfgs[0]
+        base_checker = RuleScorer(
+            base_cfg,
+            prompt,
+            data_loader.label_mapping,
+            label_values=getattr(data_loader, "label_values", None),
+            disable_progress=True,
+        )
+        base_vectors = base_checker.batch_score(rule_texts, test_df, labels=test_label_list)
+        base_features = np.array(base_vectors, dtype=int).T if base_vectors else np.zeros(
+            (len(test_df), len(rule_texts)),
+            dtype=int,
+        )
     _, _, base_preds = _evaluate_regression(
         base_features,
         weights,

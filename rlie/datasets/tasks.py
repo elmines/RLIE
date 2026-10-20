@@ -36,6 +36,13 @@ class BaseTask(ABC):
         # if there's a key called "label_name" in the yaml file, we set it to that
         # otherwise, we set it to "label"
         self.label_name = data.get("label_name", "label")
+        bert_input = data.get("bert_input") or {}
+        if not isinstance(bert_input, dict):
+            raise ValueError(f"bert_input must be a mapping in {config_path}")
+        bert_fields = bert_input.get("fields") or []
+        if isinstance(bert_fields, str):
+            bert_fields = [bert_fields]
+        self.bert_input_fields = [str(field) for field in bert_fields]
         data_dir = data.get("data_dir")
         if data_dir is None:
             self.data_dir = os.path.dirname(config_path)
