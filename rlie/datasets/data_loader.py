@@ -62,6 +62,7 @@ class TaskDataLoader:
             from_register=extract_label_register,
             use_ood=False,
         )
+        # self._train_samples, self._val_samples, self._test_samples = 10, 10, 10
         self.label_values: List[str] = []
         self.label_mapping = self._determine_label_mapping(config)
         self.positive_label_text: Optional[str] = None

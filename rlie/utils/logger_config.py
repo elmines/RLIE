@@ -2,10 +2,7 @@ import logging
 import colorlog
 from logging import Logger
 
-
 class LoggerConfig:
-    file_handler = None
-    console_handler = None
     level = None
 
     @staticmethod
@@ -31,33 +28,28 @@ class LoggerConfig:
         file_formatter = logging.Formatter(
             "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
         )
+        handlers: list[logging.Handler] = []
 
         if log_file_path is not None:
-            LoggerConfig.file_handler = logging.FileHandler(log_file_path)
-            LoggerConfig.file_handler.setLevel(logging.DEBUG)
-            LoggerConfig.file_handler.setFormatter(file_formatter)
+            file_handler = logging.FileHandler(log_file_path)
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(file_formatter)
+            handlers.append(file_handler)
 
-        LoggerConfig.console_handler = logging.StreamHandler()
-        LoggerConfig.console_handler.setLevel(logging.DEBUG)
-        LoggerConfig.console_handler.setFormatter(console_formatter)
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.DEBUG)
+        console_handler.setFormatter(console_formatter)
+        handlers.append(console_handler)
+
+        logging.basicConfig(
+            handlers=handlers,
+        )
+
 
     @staticmethod
     def get_logger(name: str) -> Logger:
-        if LoggerConfig.console_handler is None:
+        if LoggerConfig.level is None:
             LoggerConfig.setup_logger()
-
         logger = logging.getLogger(name)
         logger.setLevel(LoggerConfig.level)
-        
-        # Remove all handlers
-        logger.handlers = []
-        
-        # Add handlers
-        logger.addHandler(LoggerConfig.console_handler)
-        if LoggerConfig.file_handler is not None:
-            logger.addHandler(LoggerConfig.file_handler)
-                
-        # Prevent propagation to root logger
-        logger.propagate = False
-        
         return logger

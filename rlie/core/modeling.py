@@ -51,7 +51,6 @@ class SoftmaxTrainer:
 
         total_hypotheses = features.shape[1]
         base_model = LogisticRegression(
-            penalty="elasticnet",
             solver="saga",
             fit_intercept=self._fit_intercept,
             max_iter=self._max_iter,
