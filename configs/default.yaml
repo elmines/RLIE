@@ -60,6 +60,7 @@ llms:
     num_predict: 8000
     max_concurrent_per_key: 32
     max_retries: 5
+    reasoning_effort: low
     disable_thinking_models: []
     reasoning_effort_models: {}
     chat_template_kwargs_models: {}
