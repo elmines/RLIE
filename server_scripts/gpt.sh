@@ -1,12 +1,12 @@
 #!/bin/bash
 
 # Need that dev mode to get the /server_info endpoint to get the maximum model length
-model=openai/gpt-oss-20b
+MODEL=${MODEL:-openai/gpt-oss-20b}
 API_PORT=${API_PORT:-8002}
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 
 $RUN_PREFIX env VLLM_SERVER_DEV_MODE=1 CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES uv run vllm serve \
-    "$model" \
+    "$MODEL" \
     --host 0.0.0.0 \
     --port $API_PORT \
     --max-model-len $((1 << 14)) \
