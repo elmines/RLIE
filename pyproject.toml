@@ -22,6 +22,7 @@ dependencies = [
   "tqdm>=4.66.0",
   "transformers<5",
   "vllm>=0.11.0",
+  "vllm-router>=0.1.16",
 ]
 
 [tool.uv.sources]
