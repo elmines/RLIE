@@ -99,7 +99,7 @@ def batch_score_parallel(
     if rule_workers > 1:
         checker.max_concurrent = adjusted_concurrent
         LOGGER.info(
-            "规则间并行: %d 规则 × %d 样本并发 = %d 实际总并发 (预算=%d)",
+            "Cross-rule parallelism: %d rules x %d sample concurrency = %d actual total concurrency (budget=%d)",
             rule_workers,
             adjusted_concurrent,
             rule_workers * adjusted_concurrent,
@@ -191,9 +191,9 @@ def batch_score(
     labels: Optional[Sequence[int]] = None,
 ) -> List[List[int]]:
     if len(rules) <= 2:
-        LOGGER.debug("使用串行评分模式 (规则数=%d)", len(rules))
+        LOGGER.debug("Using serial scoring mode (rules=%d)", len(rules))
         return batch_score_serial(checker, rules, samples, labels)
-    LOGGER.debug("使用并行评分模式 (规则数=%d)", len(rules))
+    LOGGER.debug("Using parallel scoring mode (rules=%d)", len(rules))
     return batch_score_parallel(checker, rules, samples, labels)
 
 

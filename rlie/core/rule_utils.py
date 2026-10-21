@@ -89,7 +89,7 @@ def filter_rules_by_coverage(
             keep_indices = [best_idx]
             if logger is not None:
                 logger.info(
-                    "%s: 所有规则覆盖率低于阈值 %.3f，仅保留覆盖率最高的规则 (%.3f)",
+                    "%s: all rules are below the coverage threshold %.3f; keeping only the highest-coverage rule (%.3f)",
                     context or "coverage_filter",
                     threshold,
                     coverages[best_idx],
@@ -98,7 +98,7 @@ def filter_rules_by_coverage(
             removed = len(rules)
             if removed and logger is not None:
                 logger.info(
-                    "%s: 移除了 %d 条覆盖率低于 %.3f 的规则",
+                    "%s: removed %d rules with coverage below %.3f",
                     context or "coverage_filter",
                     removed,
                     threshold,
@@ -108,7 +108,7 @@ def filter_rules_by_coverage(
     removed = len(rules) - len(keep_indices)
     if removed > 0 and logger is not None:
         logger.info(
-            "%s: 移除了 %d 条覆盖率低于 %.3f 的规则",
+            "%s: removed %d rules with coverage below %.3f",
             context or "coverage_filter",
             removed,
             threshold,

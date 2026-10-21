@@ -319,7 +319,7 @@ def run_single_task(
     )
     if not rules:
         LOGGER.error(
-            "Round %d: 无规则满足覆盖率阈值 %.3f，终止任务 %s",
+            "Round %d: no rule meets the coverage threshold %.3f; stopping task %s",
             round_idx,
             coverage_threshold,
             task_name,
@@ -358,7 +358,7 @@ def run_single_task(
     )
     result = trainer.train(features, train_labels)
     LOGGER.info(
-        "Round %d: 超参搜索选择 params=%s (metric=%s cv_best=%.4f)",
+        "Round %d: hyperparameter search selected params=%s (metric=%s cv_best=%.4f)",
         round_idx,
         result.best_params,
         result.selection_metric,
@@ -366,7 +366,7 @@ def run_single_task(
     )
     LOGGER.info("Round %d training accuracy=%.3f f1=%.3f", round_idx, result.accuracy, result.f1)
     LOGGER.info(
-        "Round %d: 一共有 %d 个假设, 保留 %d 个假设",
+        "Round %d: %d hypotheses total, %d retained",
         round_idx,
         result.total_hypotheses,
         result.retained_hypotheses,
@@ -435,7 +435,7 @@ def run_single_task(
             "metric_value": current_metric,
         }
         LOGGER.info(
-            "Round %d: 更新最佳验证%s=%.3f",
+            "Round %d: updated best validation %s=%.3f",
             round_idx,
             best_metric_display,
             current_metric,
@@ -575,7 +575,7 @@ def run_single_task(
         )
         if not new_rules:
             LOGGER.info(
-                "Round %d: 所有新规则覆盖率低于 %.3f，跳过本轮更新",
+                "Round %d: all new rules have coverage below %.3f; skipping this round's update",
                 round_idx,
                 coverage_threshold,
             )
@@ -616,7 +616,7 @@ def run_single_task(
         result = trainer.train(features, train_labels)
         avg_delta = convergence.compute_confidence_delta(result.probabilities, train_labels)
         LOGGER.info(
-            "Round %d: 超参搜索选择 params=%s (metric=%s cv_best=%.4f)",
+            "Round %d: hyperparameter search selected params=%s (metric=%s cv_best=%.4f)",
             round_idx,
             result.best_params,
             result.selection_metric,
@@ -630,7 +630,7 @@ def run_single_task(
             avg_delta,
         )
         LOGGER.info(
-            "Round %d: 一共有 %d 个假设, 保留 %d 个假设",
+            "Round %d: %d hypotheses total, %d retained",
             round_idx,
             result.total_hypotheses,
             result.retained_hypotheses,
@@ -694,7 +694,7 @@ def run_single_task(
                 "metric_value": current_metric,
             }
             LOGGER.info(
-                "Round %d: 更新最佳验证%s=%.3f",
+                "Round %d: updated best validation %s=%.3f",
                 round_idx,
                 best_metric_display,
                 current_metric,
@@ -733,7 +733,7 @@ def run_single_task(
             mlp_bank.save_round(round_idx, dataset_dir, feature_store.rules)
 
     if best_snapshot is None:
-        LOGGER.warning("未找到有效的验证集指标，使用最后一轮模型作为最佳模型")
+        LOGGER.warning("No valid validation metrics found; using the last round's model as the best model")
         best_snapshot = {
             "round": round_idx,
             "model": result.model,
@@ -852,7 +852,7 @@ def run_single_task(
     )
 
     output_dir = config["logging"]["output_dir"]
-    # 使用 run_eval_only 的评估逻辑：实验A+B（基于已保存的快照）
+    # Use run_eval_only's evaluation logic: experiments A and B, from the saved snapshot.
     eval_payload = run_eval_only.run_eval_only(
         config_path=config_path,
         run_dir=output_dir,
@@ -860,7 +860,7 @@ def run_single_task(
         task_root=task_name,
         repeat_index=repeat_index,
     )
-    # 汇总：实验A+B结果
+    # Aggregate experiment A and experiment B results.
     summaries: Dict[str, Dict[str, float]] = {}
     for block in ("experiment_A", "experiment_B"):
         block_data = eval_payload.get(block, {})

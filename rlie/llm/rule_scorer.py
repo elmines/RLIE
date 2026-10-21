@@ -54,18 +54,18 @@ class RuleScorer:
         self.num_predict = int(config.get("num_predict", 64))
         self.output_dir = config.get("output_dir")
 
-        # 并发度优先级：_concurrent_budget（注入） > max_concurrent_per_key（新） > max_concurrent（旧，已弃用）
+        # Concurrency priority: _concurrent_budget (injected) > max_concurrent_per_key (new) > max_concurrent (old, deprecated).
         if "_concurrent_budget" in config:
             self.max_concurrent = max(1, int(config["_concurrent_budget"]))
-            LOGGER.debug("使用注入的并发预算: %d", self.max_concurrent)
+            LOGGER.debug("Using injected concurrency budget: %d", self.max_concurrent)
         elif "max_concurrent_per_key" in config:
-            # 如果配置了 max_concurrent_per_key，需要根据 API key 数量计算
-            # 但此时我们可能还不知道 key 数量，先记录一个占位值，后面按真实 key 数调整
+            # max_concurrent_per_key must be scaled by the API key count.
+            # The key count may be unknown here, so store a placeholder and adjust it once the real count is known.
             per_key = int(config["max_concurrent_per_key"])
             self.max_concurrent = max(1, per_key)
-            LOGGER.debug("使用 max_concurrent_per_key 占位值: %d (待按真实 key 数调整)", self.max_concurrent)
+            LOGGER.debug("Using max_concurrent_per_key placeholder: %d (will adjust to the real key count)", self.max_concurrent)
         else:
-            # 向后兼容：使用旧的 max_concurrent
+            # Backward compatibility: use the old max_concurrent setting.
             self.max_concurrent = max(
                 1,
                 int(
@@ -75,13 +75,13 @@ class RuleScorer:
                     )
                 ),
             )
-            LOGGER.debug("使用旧的 max_concurrent 配置: %d", self.max_concurrent)
+            LOGGER.debug("Using legacy max_concurrent config: %d", self.max_concurrent)
         self.max_retries = max(1, int(config.get("max_retries", 3)))
         self.max_parse_retries = max(1, int(config.get("max_parse_retries", self.max_retries)))
         self.min_backoff = float(config.get("min_backoff", 1.0))
         self.max_backoff = float(config.get("max_backoff", 30.0))
         self.request_delay = float(config.get("request_delay", 0.0))
-        # 全局关闭进度条，避免多线程刷新干扰；如需打开可传入 disable_progress=False
+        # Disable the progress bar globally to avoid refresh noise from multiple threads; pass disable_progress=False to turn it back on.
         if disable_progress is None:
             self._disable_tqdm = False
         else:
@@ -128,7 +128,7 @@ class RuleScorer:
                     retry_overhead,
                 )
                 LOGGER.debug(
-                    "按真实 key 数调整 max_concurrent=%d (keys=%d, retry_overhead=%.2f)",
+                    "Adjusted max_concurrent=%d to the real key count (keys=%d, retry_overhead=%.2f)",
                     self.max_concurrent,
                     len(api_keys),
                     retry_overhead,
@@ -281,7 +281,7 @@ class RuleScorer:
                     progress_callback(1)
             return results
 
-        # 滑动窗口模式：完成一个处理一个，避免被慢请求阻塞整批
+        # Sliding window: handle each request as it finishes so one slow request does not block the batch.
         with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
             results = [0] * len(indices)
             future_to_pos = {
@@ -397,7 +397,7 @@ class RuleScorer:
                     "timeout": self.request_timeout,
                 }
 
-                # 根据重试次数选择客户端：首次尝试用常规 client，重试时轮换 key
+                # Pick a client by attempt: the first try uses the regular client, retries rotate keys.
                 if attempt == 1:
                     client = self._client_pool.get_sync_client() if self._client_pool else self.client
                 else:
@@ -429,7 +429,7 @@ class RuleScorer:
                         }
                     )
                     extra_body = {}
-                    # DeepSeek 官方 API 对未支持的额外参数较为严格，直接跳过 extra_body
+                    # The official DeepSeek API rejects unsupported extra parameters, so skip extra_body.
                     base_url = self._base_url
                     if not (base_url and str(base_url).startswith("https://api.deepseek.com")):
                         if self._thinking_mode is not None:
@@ -443,7 +443,7 @@ class RuleScorer:
                     response = client.chat.completions.create(**kwargs)
                     content = response.choices[0].message.content or ""
                 record_usage(self.output_dir, "evaluation", getattr(response, "usage", None))
-                # 添加请求间延迟，避免突发并发导致 API 限流
+                # Delay between requests so a burst of concurrency does not hit API rate limits.
                 if self.request_delay > 0:
                     time.sleep(self.request_delay)
                 return content
@@ -471,18 +471,18 @@ class RuleScorer:
                 time.sleep(backoff)
                 backoff = min(backoff * 2, self.max_backoff)
                 continue
-            except JSONDecodeError as exc:  # API 返回非 JSON 响应
+            except JSONDecodeError as exc:  # API returned a non-JSON response
                 if attempt >= self.max_retries:
                     LOGGER.error(
                         "JSON decode failed after %d attempts [sync]: model=%s; error=%s; "
-                        "这通常表示 API 服务返回了错误页面而非 JSON，请检查 API 服务状态",
+                        "this usually means the API returned an error page instead of JSON; check the API service",
                         attempt,
                         self.model,
                         exc,
                     )
                     return "Final answer: not applicable"
 
-                # 第一次失败用 debug，避免污染日志
+                # Log the first failure at debug so it does not flood the log.
                 log_func = LOGGER.debug if attempt == 1 else LOGGER.warning
                 log_func(
                     "JSON decode failed (attempt %d/%d) [sync]: model=%s; error=%s",
@@ -491,7 +491,7 @@ class RuleScorer:
                     self.model,
                     exc,
                 )
-                # JSON 错误通常是服务器暂时性问题，使用更长退避时间
+                # JSON errors are usually transient server problems, so back off longer.
                 backoff = min(backoff * 3, self.max_backoff)
                 time.sleep(backoff)
                 continue
@@ -506,7 +506,7 @@ class RuleScorer:
                     )
                     return "Final answer: not applicable"
 
-                # 第一次失败用 debug，避免污染日志
+                # Log the first failure at debug so it does not flood the log.
                 log_func = LOGGER.debug if attempt == 1 else LOGGER.warning
                 log_func(
                     "Unexpected error (attempt %d/%d) [sync]: model=%s; error=%s",
@@ -567,7 +567,7 @@ class RuleScorer:
                 if progress_callback is not None:
                     progress_callback(1)
 
-            # 滑动窗口模式：一次性创建所有任务，完成一个处理一个
+            # Sliding window: create every task up front and handle each one as it finishes.
             tasks = [
                 asyncio.create_task(_evaluate(pos, row_idx))
                 for pos, row_idx in enumerate(indices)
@@ -585,13 +585,13 @@ class RuleScorer:
     ) -> str:
         backoff = self.min_backoff
         for attempt in range(1, self.max_retries + 1):
-            async with semaphore:  # 移到循环内，失败时释放 semaphore
+            async with semaphore:  # Inside the loop so a failure releases the semaphore.
                 try:
                     kwargs = {
                         "timeout": self.request_timeout,
                     }
 
-                    # 根据重试次数选择客户端：首次尝试用常规 client，重试时轮换 key
+                    # Pick a client by attempt: the first try uses the regular client, retries rotate keys.
                     if attempt == 1:
                         client = self._client_pool.get_async_client() if self._client_pool else self.async_client
                     else:
@@ -638,7 +638,7 @@ class RuleScorer:
                             return "Final answer: not applicable"
                         content = response.choices[0].message.content or ""
                     record_usage(self.output_dir, "evaluation", getattr(response, "usage", None))
-                    # 添加请求间延迟，避免突发并发导致 API 限流
+                    # Delay between requests so a burst of concurrency does not hit API rate limits.
                     if self.request_delay > 0:
                         await asyncio.sleep(self.request_delay)
                     return content
@@ -646,7 +646,7 @@ class RuleScorer:
                     if isinstance(exc, APIError) and self._maybe_toggle_thinking(exc):
                         continue
 
-                    # 第一次失败用 debug，避免污染日志
+                    # Log the first failure at debug so it does not flood the log.
                     log_func = LOGGER.debug if attempt == 1 else LOGGER.warning
                     log_func(
                         "Remote request failed (attempt %d/%d): %s",
@@ -656,19 +656,19 @@ class RuleScorer:
                     )
                     if attempt == self.max_retries:
                         break
-                    # 释放 semaphore 后再 sleep，避免占用并发槽
-                except JSONDecodeError as exc:  # API 返回非 JSON 响应
+                    # Sleep after releasing the semaphore so the concurrency slot is not held.
+                except JSONDecodeError as exc:  # API returned a non-JSON response
                     if attempt == self.max_retries:
                         LOGGER.error(
                             "JSON decode failed after %d attempts [async]: model=%s; error=%s; "
-                            "这通常表示 API 服务返回了错误页面而非 JSON，请检查 API 服务状态",
+                            "this usually means the API returned an error page instead of JSON; check the API service",
                             attempt,
                             self.model,
                             exc,
                         )
                         return "Final answer: not applicable"
 
-                    # 第一次失败用 debug，避免污染日志
+                    # Log the first failure at debug so it does not flood the log.
                     log_func = LOGGER.debug if attempt == 1 else LOGGER.warning
                     log_func(
                         "JSON decode failed (attempt %d/%d) [async]: model=%s; error=%s",
@@ -677,7 +677,7 @@ class RuleScorer:
                         self.model,
                         exc,
                     )
-                    # JSON 错误通常是服务器暂时性问题，使用更长退避时间（在外部 sleep）
+                    # JSON errors are usually transient server problems, so back off longer (sleep outside the semaphore).
                     if attempt < self.max_retries:
                         await asyncio.sleep(backoff * 3)
                         backoff = min(backoff * 3, self.max_backoff)
@@ -687,12 +687,12 @@ class RuleScorer:
                         LOGGER.error("Unexpected remote error after %d attempts: %s", attempt, exc)
                         return "Final answer: not applicable"
 
-                    # 第一次失败用 debug，避免污染日志
+                    # Log the first failure at debug so it does not flood the log.
                     log_func = LOGGER.debug if attempt == 1 else LOGGER.warning
                     log_func("Unexpected remote error (attempt %d/%d): %s", attempt, self.max_retries, exc)
-                    # 继续到外部的 sleep
+                    # Fall through to the sleep outside the semaphore.
 
-            # 在 semaphore 外部 sleep，释放并发槽
+            # Sleep outside the semaphore so the concurrency slot is free.
             if attempt < self.max_retries:
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, self.max_backoff)
@@ -758,11 +758,11 @@ class RuleScorer:
         if "enable_thinking" not in message:
             return False
         if "must be set to false" in message and self._thinking_mode is True:
-            LOGGER.info("模型 %s 要求关闭思考模式，自动改为 enable_thinking=false", self.model_name)
+            LOGGER.info("Model %s requires thinking mode off; setting enable_thinking=false", self.model_name)
             self._thinking_mode = False
             return True
         if "unknown parameter" in message and self._thinking_mode is not None:
-            LOGGER.info("模型 %s 不支持 enable_thinking，自动移除该参数", self.model_name)
+            LOGGER.info("Model %s does not support enable_thinking; removing that parameter", self.model_name)
             self._thinking_mode = None
             return True
         return False

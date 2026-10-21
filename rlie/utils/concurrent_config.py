@@ -1,6 +1,7 @@
-"""并发配置和预算分配工具模块
+"""Concurrency configuration and budget allocation utilities.
 
-提供统一的并发限制计算和多层并行预算分配功能。
+Provides a single way to compute concurrency limits and allocate a budget
+across nested parallel work.
 """
 import logging
 from typing import Dict, List, Tuple
@@ -10,16 +11,16 @@ LOGGER = logging.getLogger("rlie.concurrent_config")
 
 
 def extract_api_keys(client_cfg: Dict) -> List[str]:
-    """从配置中提取 API keys 列表
+    """Extract the API key list from a client config.
 
     Args:
-        client_cfg: client 配置字典，包含 api_key 或 api_keys
+        client_cfg: Client config dict containing api_key or api_keys.
 
     Returns:
-        API keys 列表
+        List of API keys.
 
     Raises:
-        ValueError: 如果没有找到有效的 API keys
+        ValueError: If no valid API keys are found.
     """
     api_keys = client_cfg.get("api_keys") or client_cfg.get("api_key")
 
@@ -43,18 +44,18 @@ def calculate_total_concurrent_limit(
     num_keys: int,
     retry_overhead: float = 0.15,
 ) -> int:
-    """计算总并发限制（考虑重试开销）
+    """Compute the total concurrency limit, reserving headroom for retries.
 
     Args:
-        config: 配置字典，应包含 max_concurrent_per_key
-        num_keys: API key 数量
-        retry_overhead: 重试开销预留比例（默认 0.15 即 15%）
+        config: Config dict; must contain max_concurrent_per_key.
+        num_keys: Number of API keys.
+        retry_overhead: Fraction of capacity reserved for retries (default 0.15, i.e. 15%).
 
     Returns:
-        有效的总并发限制
+        Effective total concurrency limit.
 
     Raises:
-        ValueError: 如果配置中缺少 max_concurrent_per_key
+        ValueError: If max_concurrent_per_key is missing from the config.
     """
     per_key = config.get("max_concurrent_per_key")
     if per_key is None:
@@ -71,13 +72,13 @@ def calculate_total_concurrent_limit(
     if not 0.0 <= retry_overhead < 1.0:
         raise ValueError(f"retry_overhead must be in [0, 1), got {retry_overhead}")
 
-    # 总并发 = 每个key的并发 × key数量 × (1 - 重试开销)
+    # total concurrency = per-key concurrency x key count x (1 - retry overhead)
     theoretical_limit = per_key * num_keys
     effective_limit = int(theoretical_limit * (1.0 - retry_overhead))
 
     LOGGER.info(
-        "并发限制计算: %d keys × %d per_key = %d 理论上限, "
-        "预留 %.0f%% 重试开销后 = %d 有效上限",
+        "Concurrency limit: %d keys x %d per_key = %d theoretical max, "
+        "after reserving %.0f%% for retries = %d effective max",
         num_keys,
         per_key,
         theoretical_limit,
@@ -94,48 +95,48 @@ def allocate_concurrent_budget(
     inner_parallelism: int,
     min_inner: int = 5,
 ) -> Tuple[int, int]:
-    """分配两层并行结构的并发预算
+    """Allocate a concurrency budget across a two-level parallel structure.
 
     Args:
-        total_limit: 总并发限制
-        outer_parallelism: 外层并行度（如 repeat 数量或 model 数量）
-        inner_parallelism: 内层期望并行度（如 rule 数量或 sample 数量）
-        min_inner: 内层最小保证并发度（默认 5）
+        total_limit: Total concurrency limit.
+        outer_parallelism: Outer parallelism (for example, repeat count or model count).
+        inner_parallelism: Desired inner parallelism (for example, rule count or sample count).
+        min_inner: Minimum guaranteed inner concurrency (default 5).
 
     Returns:
-        (outer_workers, inner_concurrent): 外层并行数和内层并发数的元组
+        (outer_workers, inner_concurrent): outer worker count and inner concurrency.
 
     Examples:
         >>> allocate_concurrent_budget(85, 3, 5, min_inner=5)
-        (3, 28)  # 3 个 repeat，每个 repeat 内 28 并发
+        (3, 28)  # 3 repeats, 28 concurrent requests inside each repeat
 
         >>> allocate_concurrent_budget(28, 5, 20, min_inner=5)
-        (5, 5)   # 5 个 rule，每个 rule 内 5 并发（受限于 min_inner）
+        (5, 5)   # 5 rules, 5 concurrent requests inside each rule (limited by min_inner)
     """
     total_limit = max(1, int(total_limit))
     outer_parallelism = max(1, int(outer_parallelism))
     inner_parallelism = max(1, int(inner_parallelism))
     min_inner = max(1, int(min_inner))
 
-    # 情况1: 外层并行度为1，全部预算给内层
+    # Case 1: a single outer worker gets the entire budget for the inner work.
     if outer_parallelism == 1:
         inner_concurrent = min(total_limit, inner_parallelism)
         LOGGER.debug(
-            "单外层分配: total=%d → inner=%d (期望=%d)",
+            "Single outer worker: total=%d -> inner=%d (desired=%d)",
             total_limit,
             inner_concurrent,
             inner_parallelism,
         )
         return 1, inner_concurrent
 
-    # 情况2: 总预算不足以给每个外层分配 min_inner
+    # Case 2: the budget cannot give every outer worker min_inner.
     min_required = outer_parallelism * min_inner
     if total_limit < min_required:
-        # 降低外层并行度
+        # Reduce outer parallelism.
         outer_workers = max(1, total_limit // min_inner)
         inner_concurrent = min_inner
         LOGGER.warning(
-            "预算不足: total=%d < %d×%d=%d, 降低外层并行度 %d→%d",
+            "Budget too small: total=%d < %d x %d = %d, reducing outer parallelism %d -> %d",
             total_limit,
             outer_parallelism,
             min_inner,
@@ -145,15 +146,15 @@ def allocate_concurrent_budget(
         )
         return outer_workers, inner_concurrent
 
-    # 情况3: 正常分配
-    # 策略: 保持外层全并行，平均分配给内层
+    # Case 3: normal allocation.
+    # Keep every outer worker and split the budget evenly across the inner work.
     outer_workers = outer_parallelism
     inner_budget = total_limit // outer_parallelism
     inner_concurrent = max(min_inner, min(inner_budget, inner_parallelism))
 
     actual_total = outer_workers * inner_concurrent
     LOGGER.debug(
-        "两层分配: total=%d → outer=%d × inner=%d = %d (内层期望=%d)",
+        "Two-level allocation: total=%d -> outer=%d x inner=%d = %d (desired inner=%d)",
         total_limit,
         outer_workers,
         inner_concurrent,

@@ -39,7 +39,7 @@ def parse_evaluation_modes(config: Dict) -> List[str]:
     elif isinstance(raw_modes, (list, tuple)):
         modes = [str(item).strip() for item in raw_modes if str(item).strip()]
     else:
-        raise ValueError("evaluation.modes 必须是字符串或列表")
+        raise ValueError("evaluation.modes must be a string or a list")
     valid = {
         "regression_only",
         "llm_evaluation",
@@ -50,7 +50,7 @@ def parse_evaluation_modes(config: Dict) -> List[str]:
     for mode in modes:
         key = mode.lower()
         if key not in valid:
-            raise ValueError(f"未知的 evaluation mode: {mode}")
+            raise ValueError(f"Unknown evaluation mode: {mode}")
         normalized.append(key)
     return normalized
 
@@ -151,27 +151,27 @@ def evaluate_models(
         "llm_evaluation_with_linear_regression_and_label": "final_test_metrics_llm_evaluation_with_linear_regression_and_label",
     }
 
-    # 模型级并发预算分配
+    # Per-model concurrency budget allocation.
     model_configs_with_budget = []
     for model_name, cfg in evaluation_model_cfgs:
         cfg_copy = copy.deepcopy(cfg)
 
-        # 如果有 repeat 级别注入的预算，分配给各个模型
+        # If a repeat-level budget was injected, split it across models.
         if "_concurrent_budget" in cfg_copy:
             repeat_budget = cfg_copy["_concurrent_budget"]
             num_models = len(evaluation_model_cfgs)
 
-            # 使用 allocate_concurrent_budget 分配
-            # 假设每个模型内部有多个样本需要评估
+            # Allocate with allocate_concurrent_budget.
+            # Assume each model evaluates many samples internally.
             _, per_model_budget = concurrent_config.allocate_concurrent_budget(
                 total_limit=repeat_budget,
                 outer_parallelism=num_models,
-                inner_parallelism=100,  # 假设样本数量（实际会根据样本数动态调整）
+                inner_parallelism=100,  # Assumed sample count; adjusted later to the real count.
                 min_inner=5,
             )
             cfg_copy["_concurrent_budget"] = per_model_budget
             LOGGER.debug(
-                "模型 %s 分配并发预算: %d (repeat预算=%d, 模型数=%d)",
+                "Model %s assigned concurrency budget: %d (repeat budget=%d, models=%d)",
                 model_name,
                 per_model_budget,
                 repeat_budget,
@@ -227,18 +227,18 @@ def evaluate_models(
 
     if should_run_regression:
         if not model_configs_with_budget:
-            LOGGER.info("实验A：无评估模型可用，跳过")
+            LOGGER.info("Experiment A: no evaluation model available; skipping")
         else:
             first_model_name, first_cfg = model_configs_with_budget[0]
-            LOGGER.info("实验A：回归重打分 - 只运行第一个评估模型: %s", first_model_name)
+            LOGGER.info("Experiment A: regression rescore - running only the first evaluation model: %s", first_model_name)
             try:
                 _score_regression_model(first_model_name, first_cfg)
-                LOGGER.info("实验A：模型 %s 回归重打分完成", first_model_name)
+                LOGGER.info("Experiment A: regression rescore finished for model %s", first_model_name)
             except Exception as exc:
-                LOGGER.error("实验A：模型 %s 回归重打分失败: %s", first_model_name, exc)
+                LOGGER.error("Experiment A: regression rescore failed for model %s: %s", first_model_name, exc)
 
     if not llm_modes or not model_configs_with_budget:
-        LOGGER.info("未启用 LLM 评估模式或无模型可跑，跳过。")
+        LOGGER.info("LLM evaluation modes are disabled or no model is available; skipping.")
         return results
 
     def _run_llm_modes(model_name: str, cfg: Dict):
@@ -289,7 +289,7 @@ def evaluate_models(
                     "coverage": coverage,
                 }
             else:
-                LOGGER.warning("LLM evaluation (%s) 未返回任何预测", model_name)
+                LOGGER.warning("LLM evaluation (%s) returned no predictions", model_name)
 
         if "llm_evaluation_with_linear_regression" in llm_modes:
             predictions_lr = checker.evaluate_rule_set_with_linear_regression(
@@ -328,12 +328,12 @@ def evaluate_models(
                     "coverage": coverage_lr,
                 }
             else:
-                LOGGER.warning("LLM evaluation with linear regression (%s) 未返回任何预测", model_name)
+                LOGGER.warning("LLM evaluation with linear regression (%s) returned no predictions", model_name)
 
         if "llm_evaluation_with_linear_regression_and_label" in llm_modes:
             if final_test_preds is None:
                 LOGGER.warning(
-                    "LLM evaluation with linear regression + label (%s) 依赖回归预测，当前不可用",
+                    "LLM evaluation with linear regression + label (%s) needs regression predictions, which are unavailable",
                     model_name,
                 )
             else:
@@ -385,11 +385,11 @@ def evaluate_models(
                     }
                 else:
                     LOGGER.warning(
-                        "LLM evaluation with linear regression + label (%s) 未返回任何预测",
+                        "LLM evaluation with linear regression + label (%s) returned no predictions",
                         model_name,
                     )
 
-    LOGGER.info("实验B：使用基准模型的特征，遍历所有评估模型跑 LLM 策略 - 并行执行 %d 个评估模型", len(model_configs_with_budget))
+    LOGGER.info("Experiment B: using baseline-model features and running LLM strategies across all evaluation models - %d models in parallel", len(model_configs_with_budget))
     with ThreadPoolExecutor(max_workers=len(model_configs_with_budget)) as executor:
         futures = {
             executor.submit(_run_llm_modes, model_name, cfg): model_name
@@ -399,9 +399,9 @@ def evaluate_models(
             model_name = futures[future]
             try:
                 future.result()
-                LOGGER.info("实验B：模型 %s LLM评估完成", model_name)
+                LOGGER.info("Experiment B: LLM evaluation finished for model %s", model_name)
             except Exception as exc:
-                LOGGER.error("实验B：模型 %s LLM评估失败: %s", model_name, exc)
+                LOGGER.error("Experiment B: LLM evaluation failed for model %s: %s", model_name, exc)
 
-    LOGGER.info("评估阶段完成，结果保存在 %s", run_dir)
+    LOGGER.info("Evaluation stage finished; results saved in %s", run_dir)
     return results

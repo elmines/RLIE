@@ -67,14 +67,14 @@ def _load_rule_snapshot(run_dir: str, round_id: Optional[int] = None) -> Tuple[i
         pattern = os.path.join(snapshot_dir, "round_*_rules.json")
         candidates = sorted(glob.glob(pattern))
         if not candidates:
-            raise FileNotFoundError(f"未找到规则快照文件，检查目录是否存在: {snapshot_dir}")
+            raise FileNotFoundError(f"No rule snapshot files found; check that the directory exists: {snapshot_dir}")
         last = os.path.basename(candidates[-1])
         match = re.search(r"round_(\d+)_rules\.json", last)
         round_id = int(match.group(1)) if match else len(candidates) - 1
 
     snapshot_path = os.path.join(snapshot_dir, f"round_{round_id:02d}_rules.json")
     if not os.path.exists(snapshot_path):
-        raise FileNotFoundError(f"规则快照不存在: {snapshot_path}")
+        raise FileNotFoundError(f"Rule snapshot does not exist: {snapshot_path}")
 
     with open(snapshot_path, "r") as f:
         payload = json.load(f)
@@ -170,7 +170,7 @@ def run_eval_only(
 ) -> Dict[str, Dict[str, Dict[str, float]]]:
     raw_config = load_config(config_path)
     evaluation_modes = parse_evaluation_modes(raw_config)
-    LOGGER.info("评估模式：%s", ", ".join(evaluation_modes))
+    LOGGER.info("Evaluation modes: %s", ", ".join(evaluation_modes))
 
     if repeat_index is None:
         repeat_index = _parse_repeat_index(run_dir, fallback=0)
@@ -180,10 +180,10 @@ def run_eval_only(
         roots = raw_config.get("data_roots") or []
         if not task_root and roots:
             if len(roots) > 1:
-                raise ValueError("config.data_roots 含多个任务，请通过 --task_root 指定")
+                raise ValueError("config.data_roots contains multiple tasks; specify one with --task_root")
             task_root = roots[0]
     if not task_root:
-        raise ValueError("缺少任务路径 data_root，请在 config 或参数中指定。")
+        raise ValueError("Missing task path data_root; set it in the config or via arguments.")
 
     data_loader, train_df, val_df, test_df = _prepare_datasets(raw_config, task_root, repeat_index)
     label_mapping = data_loader.label_mapping
@@ -192,9 +192,9 @@ def run_eval_only(
     test_labels = np.array(map_labels(test_df, label_mapping, data_loader.task.label_name))
     test_label_list = test_labels.tolist()
 
-    # 规则与权重
+    # Rules and weights.
     best_round, snapshot_dir, rule_texts, weights, bias = _load_rule_snapshot(run_dir, round_id)
-    LOGGER.info("使用规则快照：%s (round=%d)", snapshot_dir, best_round)
+    LOGGER.info("Using rule snapshot: %s (round=%d)", snapshot_dir, best_round)
     active_indices = [idx for idx, w in enumerate(weights) if abs(w) > 1e-12]
     active_texts = [rule_texts[idx] for idx in active_indices]
     weighted_hypotheses = [(rule_texts[idx], float(weights[idx])) for idx in active_indices]
@@ -210,7 +210,7 @@ def run_eval_only(
     if evaluation_model_names is None:
         evaluation_model_names = []
     elif not isinstance(evaluation_model_names, list):
-        raise ValueError("config.llms.generation.evaluation_models 必须是列表")
+        raise ValueError("config.llms.generation.evaluation_models must be a list")
     evaluation_model_names = [str(name) for name in evaluation_model_names if str(name).strip()]
     if not evaluation_model_names:
         fallback = evaluation_llm_cfg.get("model")
@@ -235,7 +235,7 @@ def run_eval_only(
         from rlie.bert.mlp import predict_saved_mlp_features
 
         mlp_dir = os.path.join(run_dir, "rule_mlps", f"round_{int(best_round):02d}")
-        LOGGER.info("实验A：使用 BERT MLP 连续特征 %s", mlp_dir)
+        LOGGER.info("Experiment A: using BERT MLP continuous features from %s", mlp_dir)
         bert_test_features = predict_saved_mlp_features(
             config=raw_config,
             task=data_loader.task,
@@ -245,7 +245,8 @@ def run_eval_only(
             rule_texts=rule_texts,
         )
 
-    # 实验 A：回归特征 + 基线。bert_mlp 用已保存的 MLP；否则用第一个评估模型重打分。
+    # Experiment A: regression features and baseline. bert_mlp uses the saved MLP;
+    # otherwise rescore with the first evaluation model.
     regression_results: Dict[str, Dict[str, float]] = {}
     if bert_test_features is not None or evaluation_model_cfgs:
         if bert_test_features is not None:
@@ -253,7 +254,7 @@ def run_eval_only(
             feature_matrix = bert_test_features
         else:
             model_name, cfg = evaluation_model_cfgs[0]
-            LOGGER.info("实验A：回归重打分 - 只运行第一个评估模型: %s", model_name)
+            LOGGER.info("Experiment A: regression rescore - running only the first evaluation model: %s", model_name)
             checker = RuleScorer(
                 cfg,
                 prompt,
@@ -292,9 +293,10 @@ def run_eval_only(
             }
         }
 
-    # 实验 B：使用第一个评估模型的基准特征/回归预测，遍历所有评估模型测试 LLM 三种策略
+    # Experiment B: use the first evaluation model's baseline features and regression
+    # predictions, then run the three LLM strategies across every evaluation model.
     if not evaluation_model_cfgs:
-        LOGGER.warning("evaluation_models 为空，跳过实验B")
+        LOGGER.warning("evaluation_models is empty; skipping experiment B")
         return {
             "experiment_A": regression_results,
             "experiment_B": {},
@@ -307,7 +309,8 @@ def run_eval_only(
             "experiment_B": {},
         }
 
-    # 基准特征/预测：BERT MLP 连续分数，或第一个评估模型重打分（供 LR/Label 策略使用）
+    # Baseline features and predictions: BERT MLP continuous scores, or a rescore from
+    # the first evaluation model (used by the LR and Label strategies).
     if bert_test_features is not None:
         base_model_name = "bert_mlp"
         base_features = bert_test_features
@@ -333,7 +336,10 @@ def run_eval_only(
         metric_labels,
     )
 
-    LOGGER.info("实验B：使用基准模型 %s 的特征，遍历所有评估模型跑 LLM 策略", base_model_name)
+    LOGGER.info(
+        "Experiment B: using features from baseline model %s and running LLM strategies across all evaluation models",
+        base_model_name,
+    )
     llm_results = evaluate_models(
         run_dir=run_dir,
         data_loader=data_loader,
@@ -345,7 +351,7 @@ def run_eval_only(
         bias=bias,
         active_texts=active_texts,
         weighted_hypotheses=weighted_hypotheses,
-        # 纯 LLM 模式不依赖回归；LR/Label 模式要用 base_preds
+        # Pure LLM mode does not depend on regression; LR and Label modes need base_preds.
         final_test_preds=base_preds,
         test_df=test_df,
         test_label_list=test_label_list,
@@ -355,7 +361,7 @@ def run_eval_only(
         best_round=best_round,
         skip_regression_model=None,
     )
-    # 拆分输出：A/B 分开返回
+    # Return experiment A and experiment B separately.
     return {
         "experiment_A": regression_results,
         "experiment_B": llm_results,
@@ -363,12 +369,12 @@ def run_eval_only(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="仅运行评估阶段（基于已有规则快照）")
-    parser.add_argument("--config", default="configs/default.yaml", help="配置文件路径")
-    parser.add_argument("--run_dir", required=True, help="已完成运行的输出目录，例如 outputs/run_.../<task>_repeat1")
-    parser.add_argument("--round", type=int, default=None, help="指定使用的规则轮次（默认取 final_round_metrics 中的 round）")
-    parser.add_argument("--task_root", type=str, default=None, help="指定 data_root（如 real/deceptive_reviews）")
-    parser.add_argument("--repeat_index", type=int, default=None, help="重复次数索引（0 基），若未提供则从目录名 _repeatN 推断）")
+    parser = argparse.ArgumentParser(description="Run only the evaluation stage from an existing rule snapshot")
+    parser.add_argument("--config", default="configs/default.yaml", help="Path to the config file")
+    parser.add_argument("--run_dir", required=True, help="Output directory of a finished run, e.g. outputs/run_.../<task>_repeat1")
+    parser.add_argument("--round", type=int, default=None, help="Rule round to use (defaults to the round in final_round_metrics)")
+    parser.add_argument("--task_root", type=str, default=None, help="data_root to use (e.g. real/deceptive_reviews)")
+    parser.add_argument("--repeat_index", type=int, default=None, help="Zero-based repeat index; if omitted, inferred from a _repeatN directory name")
     args = parser.parse_args()
 
     results = run_eval_only(
@@ -378,7 +384,7 @@ def main():
         task_root=args.task_root,
         repeat_index=args.repeat_index,
     )
-    LOGGER.info("评估完成，结果见目录 %s", args.run_dir)
+    LOGGER.info("Evaluation finished; results are in %s", args.run_dir)
     print(json.dumps(results, ensure_ascii=False, indent=2))
 
 

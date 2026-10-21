@@ -35,7 +35,7 @@ def extract_rule_weights(model, rule_count: int) -> Tuple[List[float], float]:
         named_steps = model.named_steps
         clf = named_steps["clf"]
     except (AttributeError, KeyError):  # pragma: no cover
-        LOGGER.warning("模型管线缺少 'clf' 步骤，无法提取权重")
+        LOGGER.warning("Model pipeline is missing the 'clf' step; cannot extract weights")
         return [0.0 for _ in range(rule_count)], 0.0
 
     weights = [0.0 for _ in range(rule_count)]

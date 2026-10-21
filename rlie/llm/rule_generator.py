@@ -165,7 +165,7 @@ class RuleGenerator:
                         "timeout": self.request_timeout,
                     }
                     try:
-                        # 根据重试次数选择客户端：首次尝试用常规 client，重试时轮换 key
+                        # Pick a client by attempt: the first try uses the regular client, retries rotate keys.
                         if attempt == 1:
                             client = (
                                 self._client_pool.get_sync_client()
@@ -212,7 +212,7 @@ class RuleGenerator:
                             response = client.chat.completions.create(**kwargs)
                             last_response = (response.choices[0].message.content or "") if response.choices else ""
                         record_usage(self.output_dir, "generation", getattr(response, "usage", None))
-                        # 添加请求间延迟，避免突发并发导致 API 限流
+                        # Delay between requests so a burst of concurrency does not hit API rate limits.
                         if self.request_delay > 0:
                             time.sleep(self.request_delay)
                         break
@@ -351,11 +351,11 @@ class RuleGenerator:
         if "enable_thinking" not in message:
             return False
         if "must be set to false" in message and self._thinking_mode is True:
-            LOGGER.info("模型 %s 要求关闭思考模式，自动改为 enable_thinking=false", self.model_name)
+            LOGGER.info("Model %s requires thinking mode off; setting enable_thinking=false", self.model_name)
             self._thinking_mode = False
             return True
         if "unknown parameter" in message and self._thinking_mode is not None:
-            LOGGER.info("模型 %s 不支持 enable_thinking，自动移除该参数", self.model_name)
+            LOGGER.info("Model %s does not support enable_thinking; removing that parameter", self.model_name)
             self._thinking_mode = None
             return True
         return False

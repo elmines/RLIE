@@ -78,14 +78,14 @@ def run(config_path: str = "configs/default.yaml"):
                 retry_overhead,
             )
             LOGGER.info(
-                "总并发预算: %d (基于 %d API keys, max_concurrent_per_key=%s, retry_overhead=%.0f%%)",
+                "Total concurrency budget: %d (from %d API keys, max_concurrent_per_key=%s, retry_overhead=%.0f%%)",
                 total_concurrent_limit,
                 num_keys,
                 eval_config.get("max_concurrent_per_key"),
                 retry_overhead * 100,
             )
         except (ValueError, KeyError) as exc:
-            LOGGER.warning("无法计算并发预算，将使用配置中的原始值: %s", exc)
+            LOGGER.warning("Could not compute the concurrency budget; using the original config values: %s", exc)
 
         futures = {}
         max_workers = max(1, min(repeat, (os.cpu_count() or repeat)))
@@ -104,7 +104,7 @@ def run(config_path: str = "configs/default.yaml"):
                     per_repeat_budget = max(1, total_concurrent_limit // repeat)
                     task_config["_concurrent_budget"] = per_repeat_budget
                     LOGGER.debug(
-                        "Repeat %d/%d 分配并发预算: %d",
+                        "Repeat %d/%d assigned concurrency budget: %d",
                         repeat_index + 1,
                         repeat,
                         per_repeat_budget,
