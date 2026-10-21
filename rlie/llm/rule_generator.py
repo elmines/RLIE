@@ -3,7 +3,6 @@ import logging
 import time
 from typing import Dict, List
 
-from ollama import Client as OllamaClient
 from openai import APIError, AuthenticationError, OpenAI
 
 from rlie.llm.api_client_pool import APIClientPool
@@ -27,10 +26,6 @@ FALLBACK_RULES = [
     "If a review outlines itinerary impact (missed flight, tour), mark truthful; otherwise deceptive.",
     "If a review cites price breakdowns or fees, mark truthful; otherwise deceptive.",
 ]
-
-
-def _parse_ollama_model(model_name: str) -> str:
-    return model_name.split(":", 1)[1] if ":" in model_name else model_name.partition(" ")[2] or model_name
 
 
 def _should_use_responses_api(model_name: str, force_flag: bool = False) -> bool:
@@ -97,8 +92,6 @@ class RuleGenerator:
         self._fallback_index = 0
         self.output_dir = config.get("output_dir")
 
-        model_lower = self.model_name.lower()
-        self._use_ollama = model_lower.startswith("ollama")
         client_cfg = config.get("client", {})
         request_timeout = float(config.get("request_timeout", 120))
         disable_flag = config.get("disable_thinking")
@@ -120,171 +113,151 @@ class RuleGenerator:
         )
         self._client_pool = None
 
-        if self._use_ollama:
-            host = client_cfg.get("base_url", "http://localhost:11434")
-            self.model = _parse_ollama_model(self.model_name)
-            self.client = OllamaClient(host=host, timeout=request_timeout)
+        base_url = client_cfg.get("base_url")
+        api_keys = client_cfg.get("api_keys") or client_cfg.get("api_key")
+        if isinstance(api_keys, str):
+            api_keys = [api_keys]
+        if not base_url or not api_keys:
+            raise ValueError("Rule generation requires client.base_url and api_key(s)")
+        self.model = self.model_name
+        if len(api_keys) == 1:
+            self.client = OpenAI(base_url=base_url, api_key=api_keys[0])
         else:
-            base_url = client_cfg.get("base_url")
-            api_keys = client_cfg.get("api_keys") or client_cfg.get("api_key")
-            if isinstance(api_keys, str):
-                api_keys = [api_keys]
-            if not base_url or not api_keys:
-                raise ValueError("Rule generation requires client.base_url and api_key(s)")
-            self.model = self.model_name
-            if len(api_keys) == 1:
-                self.client = OpenAI(base_url=base_url, api_key=api_keys[0])
-            else:
-                self._client_pool = APIClientPool(base_url=base_url, api_keys=api_keys)
-                self.client = None
+            self._client_pool = APIClientPool(base_url=base_url, api_keys=api_keys)
+            self.client = None
 
     def generate(self, messages: List[Dict[str, str]], expected: int) -> List[str]:
-        LOGGER.info("Calling %s model %s for %d expected hypotheses", "local" if self._use_ollama else "remote", self.model, expected)
+        LOGGER.info("Calling remote model %s for %d expected hypotheses", self.model, expected)
         prompt_text = json.dumps(messages, ensure_ascii=False, indent=2)
         record_attempt(self.output_dir, "generation")
         last_response: str = ""
         try:
-            if self._use_ollama:
-                response = self.client.chat(
-                    model=self.model,
-                    messages=messages,
-                    stream=False,
-                    options={
-                        "temperature": self.temperature,
-                        "num_predict": self.num_predict,
-                    },
-                    think=False,
-                    timeout=self.request_timeout,
-                )
-                content = (response.get("message") or {}).get("content", "")
-                last_response = content or ""
-            else:
-                backoff = self.min_backoff
-                for attempt in range(1, self.max_retries + 1):
-                    kwargs = {
-                        "timeout": self.request_timeout,
-                    }
-                    try:
-                        # Pick a client by attempt: the first try uses the regular client, retries rotate keys.
-                        if attempt == 1:
-                            client = (
-                                self._client_pool.get_sync_client()
-                                if self._client_pool
-                                else self.client
-                            )
-                        else:
-                            client = (
-                                self._client_pool.get_sync_client_for_retry(attempt)
-                                if self._client_pool
-                                else self.client
-                            )
-                        if self._use_responses_api:
-                            kwargs.update(
-                                {
-                                    "model": self.model,
-                                    "input": messages,
-                                    "max_output_tokens": self.num_predict,
-                                    "temperature": self.temperature,
-                                    "store": False,
-                                }
-                            )
-                            if self._reasoning_effort:
-                                kwargs["reasoning"] = {"effort": self._reasoning_effort}
-                            response = client.responses.create(**kwargs)
-                            last_response = _extract_response_text(response)
-                        else:
-                            kwargs.update(
-                                {
-                                    "model": self.model,
-                                    "messages": messages,
-                                    "temperature": self.temperature,
-                                }
-                            )
-                            extra_body = {}
-                            if self._thinking_mode is not None:
-                                extra_body["enable_thinking"] = self._thinking_mode
-                            if self._reasoning_effort:
-                                extra_body["reasoning_effort"] = self._reasoning_effort
-                            if self._chat_template_kwargs:
-                                extra_body.setdefault("chat_template_kwargs", self._chat_template_kwargs)
-                            if extra_body:
-                                kwargs["extra_body"] = extra_body
-                            response = client.chat.completions.create(**kwargs)
-                            last_response = (response.choices[0].message.content or "") if response.choices else ""
-                        record_usage(self.output_dir, "generation", getattr(response, "usage", None))
-                        # Delay between requests so a burst of concurrency does not hit API rate limits.
-                        if self.request_delay > 0:
-                            time.sleep(self.request_delay)
-                        break
-                    except APIError as exc:
-                        if self._maybe_toggle_thinking(exc):
-                            continue
-                        if attempt >= self.max_retries:
-                            LOGGER.warning(
-                                "Generation request failed after %d attempts [gen]: model=%s; messages=%s; error=%s; using fallback rules",
-                                attempt,
-                                self.model,
-                                messages,
-                                exc,
-                            )
-                            record_failure(
-                                output_dir=self.output_dir,
-                                stage="generation",
-                                model=self.model,
-                                attempts=attempt,
-                                error=str(exc),
-                                prompt=prompt_text,
-                                response=last_response,
-                                round_idx=None,
-                                rule=None,
-                                sample_idx=None,
-                            )
-                            return self._fallback(expected)
-                        LOGGER.debug(
-                            "Generation request failed (attempt %d/%d) [gen]: model=%s; error=%s; backing off %.1fs",
-                            attempt,
-                            self.max_retries,
-                            self.model,
-                            exc,
-                            backoff,
+            backoff = self.min_backoff
+            for attempt in range(1, self.max_retries + 1):
+                kwargs = {
+                    "timeout": self.request_timeout,
+                }
+                try:
+                    # Pick a client by attempt: the first try uses the regular client, retries rotate keys.
+                    if attempt == 1:
+                        client = (
+                            self._client_pool.get_sync_client()
+                            if self._client_pool
+                            else self.client
                         )
-                        time.sleep(backoff)
-                        backoff = min(backoff * 2, self.max_backoff)
+                    else:
+                        client = (
+                            self._client_pool.get_sync_client_for_retry(attempt)
+                            if self._client_pool
+                            else self.client
+                        )
+                    if self._use_responses_api:
+                        kwargs.update(
+                            {
+                                "model": self.model,
+                                "input": messages,
+                                "max_output_tokens": self.num_predict,
+                                "temperature": self.temperature,
+                                "store": False,
+                            }
+                        )
+                        if self._reasoning_effort:
+                            kwargs["reasoning"] = {"effort": self._reasoning_effort}
+                        response = client.responses.create(**kwargs)
+                        last_response = _extract_response_text(response)
+                    else:
+                        kwargs.update(
+                            {
+                                "model": self.model,
+                                "messages": messages,
+                                "temperature": self.temperature,
+                            }
+                        )
+                        extra_body = {}
+                        if self._thinking_mode is not None:
+                            extra_body["enable_thinking"] = self._thinking_mode
+                        if self._reasoning_effort:
+                            extra_body["reasoning_effort"] = self._reasoning_effort
+                        if self._chat_template_kwargs:
+                            extra_body.setdefault("chat_template_kwargs", self._chat_template_kwargs)
+                        if extra_body:
+                            kwargs["extra_body"] = extra_body
+                        response = client.chat.completions.create(**kwargs)
+                        last_response = (response.choices[0].message.content or "") if response.choices else ""
+                    record_usage(self.output_dir, "generation", getattr(response, "usage", None))
+                    # Delay between requests so a burst of concurrency does not hit API rate limits.
+                    if self.request_delay > 0:
+                        time.sleep(self.request_delay)
+                    break
+                except APIError as exc:
+                    if self._maybe_toggle_thinking(exc):
                         continue
-                else:  # pragma: no cover
-                    LOGGER.warning("Generation request exhausted retries unexpectedly; using fallback")
-                    record_failure(
-                        output_dir=self.output_dir,
-                        stage="generation",
-                        model=self.model,
-                        attempts=self.max_retries,
-                        error="exhausted retries",
-                        prompt=prompt_text,
-                        response=last_response,
-                        round_idx=None,
-                        rule=None,
-                        sample_idx=None,
-                    )
-                    return self._fallback(expected)
-                if self._use_responses_api:
-                    content = last_response
-                else:
-                    if not response.choices:
-                        LOGGER.warning("Remote model returned no choices; falling back")
+                    if attempt >= self.max_retries:
+                        LOGGER.warning(
+                            "Generation request failed after %d attempts [gen]: model=%s; messages=%s; error=%s; using fallback rules",
+                            attempt,
+                            self.model,
+                            messages,
+                            exc,
+                        )
                         record_failure(
                             output_dir=self.output_dir,
                             stage="generation",
                             model=self.model,
-                            attempts=self.max_retries,
-                            error="no choices returned",
+                            attempts=attempt,
+                            error=str(exc),
                             prompt=prompt_text,
-                            response=str(response),
+                            response=last_response,
                             round_idx=None,
                             rule=None,
                             sample_idx=None,
                         )
                         return self._fallback(expected)
-                    content = response.choices[0].message.content or ""
+                    LOGGER.debug(
+                        "Generation request failed (attempt %d/%d) [gen]: model=%s; error=%s; backing off %.1fs",
+                        attempt,
+                        self.max_retries,
+                        self.model,
+                        exc,
+                        backoff,
+                    )
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, self.max_backoff)
+                    continue
+            else:  # pragma: no cover
+                LOGGER.warning("Generation request exhausted retries unexpectedly; using fallback")
+                record_failure(
+                    output_dir=self.output_dir,
+                    stage="generation",
+                    model=self.model,
+                    attempts=self.max_retries,
+                    error="exhausted retries",
+                    prompt=prompt_text,
+                    response=last_response,
+                    round_idx=None,
+                    rule=None,
+                    sample_idx=None,
+                )
+                return self._fallback(expected)
+            if self._use_responses_api:
+                content = last_response
+            else:
+                if not response.choices:
+                    LOGGER.warning("Remote model returned no choices; falling back")
+                    record_failure(
+                        output_dir=self.output_dir,
+                        stage="generation",
+                        model=self.model,
+                        attempts=self.max_retries,
+                        error="no choices returned",
+                        prompt=prompt_text,
+                        response=str(response),
+                        round_idx=None,
+                        rule=None,
+                        sample_idx=None,
+                    )
+                    return self._fallback(expected)
+                content = response.choices[0].message.content or ""
         except (AuthenticationError, APIError) as exc:
             LOGGER.error("Model request failed: %s", exc)
             record_failure(

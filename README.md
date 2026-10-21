@@ -20,7 +20,7 @@ This release contains the RLIE algorithm, task prompts, and bundled datasets.
 - Natural-language rules remain inspectable throughout training.
 - Sparse logistic regression assigns weights to rules and selects useful rules.
 - Hard-example mining drives iterative rule refinement.
-- OpenAI-compatible remote APIs and Ollama-style local models are supported.
+- OpenAI-compatible remote APIs are supported.
 - Saved rule snapshots make evaluation reruns possible without regenerating rules.
 
 ## Method

@@ -7,7 +7,6 @@ from json import JSONDecodeError
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
-from ollama import Client as OllamaClient
 from openai import APITimeoutError, APIError, AsyncOpenAI, OpenAI, RateLimitError
 from tqdm.auto import tqdm
 
@@ -20,7 +19,6 @@ from rlie.llm.parsing import (
     append_answer_constraint,
     derive_label_aliases,
     extract_response_text,
-    parse_ollama_model,
     parse_prediction_response,
     should_use_responses_api,
 )
@@ -104,47 +102,40 @@ class RuleScorer:
             bool(config.get("use_responses_api", False)),
         )
 
-        self._provider = "ollama" if self.model_name.lower().startswith("ollama") else "remote"
         client_cfg = config.get("client", {})
 
-        if self._provider == "ollama":
-            host = client_cfg.get("base_url", "http://localhost:11434")
-            self.model = parse_ollama_model(self.model_name)
-            self.client = OllamaClient(host=host, timeout=self.request_timeout)
+        base_url = client_cfg.get("base_url")
+        api_keys = client_cfg.get("api_keys") or client_cfg.get("api_key")
+        if isinstance(api_keys, str):
+            api_keys = [api_keys]
+        if not base_url or not api_keys:
+            raise ValueError("Remote evaluation requires client.base_url and api_key(s)")
+
+        if "_concurrent_budget" not in config and "max_concurrent_per_key" in config:
+            retry_overhead = float(config.get("retry_overhead", 0.15))
+            self.max_concurrent = concurrent_config.calculate_total_concurrent_limit(
+                config,
+                len(api_keys),
+                retry_overhead,
+            )
+            LOGGER.debug(
+                "Adjusted max_concurrent=%d to the real key count (keys=%d, retry_overhead=%.2f)",
+                self.max_concurrent,
+                len(api_keys),
+                retry_overhead,
+            )
+
+        self.model = self.model_name
+        self._base_url = base_url
+        if len(api_keys) == 1:
+            key = api_keys[0]
+            self.client = OpenAI(base_url=base_url, api_key=key)
+            self.async_client = AsyncOpenAI(base_url=base_url, api_key=key)
             self._client_pool = None
         else:
-            base_url = client_cfg.get("base_url")
-            api_keys = client_cfg.get("api_keys") or client_cfg.get("api_key")
-            if isinstance(api_keys, str):
-                api_keys = [api_keys]
-            if not base_url or not api_keys:
-                raise ValueError("Remote evaluation requires client.base_url and api_key(s)")
-
-            if "_concurrent_budget" not in config and "max_concurrent_per_key" in config:
-                retry_overhead = float(config.get("retry_overhead", 0.15))
-                self.max_concurrent = concurrent_config.calculate_total_concurrent_limit(
-                    config,
-                    len(api_keys),
-                    retry_overhead,
-                )
-                LOGGER.debug(
-                    "Adjusted max_concurrent=%d to the real key count (keys=%d, retry_overhead=%.2f)",
-                    self.max_concurrent,
-                    len(api_keys),
-                    retry_overhead,
-                )
-
-            self.model = self.model_name
-            self._base_url = base_url
-            if len(api_keys) == 1:
-                key = api_keys[0]
-                self.client = OpenAI(base_url=base_url, api_key=key)
-                self.async_client = AsyncOpenAI(base_url=base_url, api_key=key)
-                self._client_pool = None
-            else:
-                self._client_pool = APIClientPool(base_url, api_keys)
-                self.client = None
-                self.async_client = None
+            self._client_pool = APIClientPool(base_url, api_keys)
+            self.client = None
+            self.async_client = None
 
         # All tasks treated as binary for parsing; not applicable will be counted as negative.
         self._use_three_state = False
@@ -159,8 +150,7 @@ class RuleScorer:
             logging.getLogger(logger_name).propagate = False
 
         LOGGER.info(
-            "Rule checker initialized with %s model %s (max_concurrent=%d)",
-            "local" if self._provider == "ollama" else "remote",
+            "Rule checker initialized with remote model %s (max_concurrent=%d)",
             self.model,
             self.max_concurrent,
         )
@@ -271,7 +261,7 @@ class RuleScorer:
         indices = list(range(total))
         results: List[int] = []
 
-        if self._provider == "remote" and self._use_async_remote:
+        if self._use_async_remote:
             return self._score_rule_remote(rule, samples, indices, progress_callback)
 
         if self.max_concurrent == 1:
@@ -379,20 +369,6 @@ class RuleScorer:
         backoff = self.min_backoff
         for attempt in range(1, self.max_retries + 1):
             try:
-                if self._provider == "ollama":
-                    response = self.client.chat(
-                        model=self.model,
-                        messages=messages,
-                        stream=False,
-                        options={
-                            "temperature": self.temperature,
-                            "num_predict": self.num_predict,
-                        },
-                        think=False,
-                    )
-                    message = response.get("message") or {}
-                    return message.get("content", "")
-
                 kwargs = {
                     "timeout": self.request_timeout,
                 }
@@ -524,9 +500,6 @@ class RuleScorer:
         return "Final answer: not applicable"
 
     def _run_async(self, coro):
-        if self._provider != "remote":
-            return asyncio.run(coro)
-
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 

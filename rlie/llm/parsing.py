@@ -81,14 +81,6 @@ def append_answer_constraint(messages: List[Dict[str, str]], final_options: Sequ
     return messages
 
 
-def parse_ollama_model(model_name: str) -> str:
-    if ":" in model_name:
-        return model_name.split(":", 1)[1]
-    if " " in model_name:
-        return model_name.split(" ", 1)[1]
-    return model_name
-
-
 def extract_final_answer(text: str) -> str:
     matches = list(
         re.finditer(r"final answer\s*[:\-]?\s*(.+)", text, flags=re.IGNORECASE | re.DOTALL)
