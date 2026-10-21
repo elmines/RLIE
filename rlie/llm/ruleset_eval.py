@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from typing import Callable, List, Optional, Sequence, Tuple
 
 import pandas as pd
@@ -106,6 +107,21 @@ def batch_score_parallel(
         )
 
     labels_array = list(labels) if labels is not None else None
+    aggregate_bar = None
+    aggregate_bar_lock = Lock()
+    if rule_workers > 1:
+        aggregate_bar = tqdm(
+            total=len(rules) * len(samples),
+            desc="Rule scoring",
+            unit="sample",
+            leave=True,
+            disable=checker._disable_tqdm,
+        )
+
+    def update_aggregate_progress(increment: int = 1):
+        with aggregate_bar_lock:
+            if aggregate_bar is not None:
+                aggregate_bar.update(increment)
 
     def score_single_rule(args):
         idx, rule = args
@@ -119,7 +135,14 @@ def batch_score_parallel(
         )
 
         try:
-            predictions = checker.score_rule(rule, samples, progress_callback=bar.update)
+            progress_callback = (
+                bar.update if aggregate_bar is None else update_aggregate_progress
+            )
+            predictions = checker.score_rule(
+                rule,
+                samples,
+                progress_callback=progress_callback,
+            )
             if labels_array is not None:
                 effective_pairs = [
                     (label, pred)
@@ -154,6 +177,8 @@ def batch_score_parallel(
             with ThreadPoolExecutor(max_workers=rule_workers) as executor:
                 matrix = list(executor.map(score_single_rule, enumerate(rules, start=1)))
     finally:
+        if aggregate_bar is not None:
+            aggregate_bar.close()
         checker.max_concurrent = original_max_concurrent
 
     return matrix

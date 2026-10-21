@@ -50,7 +50,6 @@ llms:
   generation:
     rule_learning_model: openai/gpt-oss-20b
     evaluation_models:
-      # - deepseek-chat
       - openai/gpt-oss-20b
     temperature: 0.0
     max_tokens: 8000
@@ -59,13 +58,13 @@ llms:
     temperature: 0.0
     request_timeout: 300
     num_predict: 8000
-    max_concurrent_per_key: 4
+    max_concurrent_per_key: 32
     max_retries: 5
     disable_thinking_models: []
     reasoning_effort_models: {}
     chat_template_kwargs_models: {}
   client:
-    base_url: 'http://0.0.0.0:8001/v1' # ${RLIE_BASE_URL}
+    base_url: 'http://0.0.0.0:8002/v1' # ${RLIE_BASE_URL}
     api_key: 'derf' #${RLIE_API_KEY}
 
 convergence:
