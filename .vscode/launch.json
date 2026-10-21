@@ -12,7 +12,8 @@
             "module": "rlie.main",
             "args": [
                 "--config", "configs/default.yaml"
-            ]
+            ],
+            "justMyCode": false
         }
     ]
 }
