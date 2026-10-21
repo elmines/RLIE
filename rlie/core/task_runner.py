@@ -37,7 +37,12 @@ from rlie.core.rule_utils import (
 )
 from rlie.utils import eval_utils
 from rlie import run_eval_only
-from rlie.bert.pipeline import build_mlp_bank, regression_feature_matrices, resolve_feature_mode
+from rlie.bert.pipeline import (
+    build_mlp_bank,
+    feature_description,
+    regression_feature_matrices,
+    resolve_feature_mode,
+)
 
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
@@ -348,7 +353,7 @@ def run_single_task(
         )
 
     features, val_features = regression_feature_matrices(feature_store, mlp_bank)
-    feature_desc = "BERT-MLP scores in [-1, 1]" if mlp_bank is not None else "LLM ternary scores"
+    feature_desc = feature_description(feature_mode)
     LOGGER.info(
         "Round %d: training logistic regression on %d samples x %d rules (%s)",
         round_idx,
@@ -605,7 +610,7 @@ def run_single_task(
             )
 
         features, val_features = regression_feature_matrices(feature_store, mlp_bank)
-        feature_desc = "BERT-MLP scores in [-1, 1]" if mlp_bank is not None else "LLM ternary scores"
+        feature_desc = feature_description(feature_mode)
         LOGGER.info(
             "Round %d: training logistic regression on %d samples x %d rules (%s)",
             round_idx,

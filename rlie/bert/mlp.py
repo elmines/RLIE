@@ -260,7 +260,7 @@ class RuleMLPBank:
     def from_config(cls, config: Dict, task, task_root: str, train_df, val_df) -> "RuleMLPBank":
         bert_cfg = config.get("bert") or {}
         if not task_root:
-            raise ValueError("feature_mode bert_mlp requires a task id such as real/headline_binary")
+            raise ValueError("feature_mode bert_static requires a task id such as real/headline_binary")
         directory = embedding_dir_for_task(bert_cfg.get("embeddings_dir", "embeddings"), task_root)
         index = load_embedding_index(directory)
         expected_model = bert_cfg.get("model_name")
@@ -362,7 +362,7 @@ class RuleMLPBank:
             payload["metadata"]["source_round"] = int(getattr(rule, "source_round", -1))
             torch.save(payload, os.path.join(directory, f"rule_{idx:03d}.pt"))
             manifest_rules.append(payload["metadata"])
-        manifest = {"round": int(round_idx), "rules": manifest_rules}
+        manifest = {"round": int(round_idx), "feature_mode": "bert_static", "rules": manifest_rules}
         with open(os.path.join(directory, "manifest.json"), "w", encoding="utf-8") as handle:
             json.dump(manifest, handle, ensure_ascii=False, indent=2)
         return directory
@@ -419,6 +419,20 @@ def predict_saved_mlp_features(
     mlp_dir: str,
     rule_texts: Sequence[str],
 ) -> np.ndarray:
+    manifest_path = os.path.join(mlp_dir, "manifest.json")
+    if os.path.exists(manifest_path):
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        if manifest.get("feature_mode") == "bert_dynamic":
+            from rlie.bert.dynamic import predict_saved_dynamic_features
+
+            return predict_saved_dynamic_features(
+                config=config,
+                task=task,
+                frame=frame,
+                mlp_dir=mlp_dir,
+                rule_texts=rule_texts,
+            )
     bert_cfg = config.get("bert") or {}
     directory = embedding_dir_for_task(bert_cfg.get("embeddings_dir", "embeddings"), task_root)
     index = load_embedding_index(directory)

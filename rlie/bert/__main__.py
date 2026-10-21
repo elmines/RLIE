@@ -2,7 +2,8 @@
 
 This step is separate from ``python -m rlie.main``. It writes one embedding per
 dataset sample. Training then loads those vectors when ``feature_mode`` is
-``bert_mlp``.
+``bert_static``. ``bert_dynamic`` fine-tunes BERT during training and does not
+use this cache.
 
 Example::
 

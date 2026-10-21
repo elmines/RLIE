@@ -18,11 +18,12 @@ model_selection_metric: acc
 best_model_metric: acc
 
 # llm: original pipeline. LLM ternary scores are the logistic-regression features.
-# bert_mlp: train one MLP per rule on precomputed BERT [CLS] embeddings to imitate
-# those ternary scores, then feed the continuous MLP outputs in [-1, 1] to
-# logistic regression. Embed first with: python -m rlie.bert --config configs/default.yaml
+# bert_static: train one MLP per rule on precomputed BERT [CLS] embeddings.
+#   Embed first with: python -m rlie.bert --config configs/default.yaml
+# bert_dynamic: fine-tune BERT together with one MLP per rule. Later rounds keep
+#   the BERT weights and any MLP already trained for a rule.
 # feature_mode: llm
-feature_mode: bert_mlp
+feature_mode: bert_static
 
 bert:
   embeddings_dir: embeddings/modbert
@@ -42,6 +43,18 @@ bert:
     patience: 5
     min_delta: 0.0001
     metric: mse
+  # Used only when feature_mode is bert_dynamic. BERT and the rule MLPs have
+  # separate learning rates. strategy is adaptive_weighting or gradnorm.
+  dynamic:
+    strategy: adaptive_weighting
+    bert_learning_rate: 0.00002
+    mlp_learning_rate: 0.001
+    weight_decay: 0.0001
+    batch_size: 8
+    max_epochs: 10
+    patience: 3
+    gradnorm_learning_rate: 0.0001
+    gradnorm_alpha: 0.0
 
 evaluation:
   modes: regression_only

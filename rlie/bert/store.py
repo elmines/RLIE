@@ -89,7 +89,7 @@ def load_embedding_index(directory: str) -> EmbeddingIndex:
     if not os.path.isdir(directory):
         raise FileNotFoundError(
             f"BERT embedding directory not found: {directory}. "
-            "Run `python -m rlie.bert --config <config>` before using feature_mode: bert_mlp."
+            "Run `python -m rlie.bert --config <config>` before using feature_mode: bert_static."
         )
     meta_path = os.path.join(directory, "meta.json")
     if not os.path.exists(meta_path):

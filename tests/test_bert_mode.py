@@ -91,7 +91,9 @@ class TestFeatureMode(unittest.TestCase):
     def test_default_mode_keeps_ternary_features(self):
         self.assertEqual(resolve_feature_mode({}), "llm")
         self.assertEqual(resolve_feature_mode({"feature_mode": "llm"}), "llm")
-        self.assertEqual(resolve_feature_mode({"feature_mode": "bert_mlp"}), "bert_mlp")
+        self.assertEqual(resolve_feature_mode({"feature_mode": "bert_static"}), "bert_static")
+        self.assertEqual(resolve_feature_mode({"feature_mode": "bert_mlp"}), "bert_static")
+        self.assertEqual(resolve_feature_mode({"feature_mode": "bert_dynamic"}), "bert_dynamic")
         with self.assertRaises(ValueError):
             resolve_feature_mode({"feature_mode": "something-else"})
         self.assertIsNone(build_mlp_bank({}, task=None, task_root="", train_df=None, val_df=None))
@@ -145,7 +147,7 @@ class TestRuleMLP(unittest.TestCase):
     def test_convergence_rule(self):
         self.assertTrue(_improved(0.4, None, "min", 1e-4))
         self.assertTrue(_improved(0.2, 0.4, "min", 1e-4))
-        self.assertFalse(_improved(0.399, 0.4, "min", 1e-4))
+        self.assertFalse(_improved(0.4 - 1e-6, 0.4, "min", 1e-4))
         self.assertTrue(_improved(0.8, 0.5, "max", 1e-4))
         self.assertFalse(_improved(float("nan"), 0.5, "min", 1e-4))
 

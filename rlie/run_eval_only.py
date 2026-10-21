@@ -231,11 +231,11 @@ def run_eval_only(
 
     feature_mode = resolve_feature_mode(raw_config)
     bert_test_features = None
-    if feature_mode == "bert_mlp":
+    if feature_mode in {"bert_static", "bert_dynamic"}:
         from rlie.bert.mlp import predict_saved_mlp_features
 
         mlp_dir = os.path.join(run_dir, "rule_mlps", f"round_{int(best_round):02d}")
-        LOGGER.info("Experiment A: using BERT MLP continuous features from %s", mlp_dir)
+        LOGGER.info("Experiment A: using %s continuous features from %s", feature_mode, mlp_dir)
         bert_test_features = predict_saved_mlp_features(
             config=raw_config,
             task=data_loader.task,
@@ -245,12 +245,12 @@ def run_eval_only(
             rule_texts=rule_texts,
         )
 
-    # Experiment A: regression features and baseline. bert_mlp uses the saved MLP;
+    # Experiment A: regression features and baseline. BERT modes use the saved model;
     # otherwise rescore with the first evaluation model.
     regression_results: Dict[str, Dict[str, float]] = {}
     if bert_test_features is not None or evaluation_model_cfgs:
         if bert_test_features is not None:
-            model_name = "bert_mlp"
+            model_name = feature_mode
             feature_matrix = bert_test_features
         else:
             model_name, cfg = evaluation_model_cfgs[0]
@@ -312,7 +312,7 @@ def run_eval_only(
     # Baseline features and predictions: BERT MLP continuous scores, or a rescore from
     # the first evaluation model (used by the LR and Label strategies).
     if bert_test_features is not None:
-        base_model_name = "bert_mlp"
+        base_model_name = feature_mode
         base_features = bert_test_features
     else:
         base_model_name, base_cfg = evaluation_model_cfgs[0]
