@@ -1,19 +1,17 @@
-import asyncio
 import json
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from json import JSONDecodeError
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple, Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 import pandas as pd
-from openai import APITimeoutError, APIError, AsyncOpenAI, OpenAI, RateLimitError
-from tqdm.auto import tqdm
+from openai import APIError, OpenAI
+from tqdm import tqdm
 
 from rlie.llm.prompt import BasePrompt
 from rlie.datasets.data_loader import _normalize_label
-from rlie.core.metrics import compute_accuracy_and_macro_f1
-from rlie.llm.api_client_pool import APIClientPool
 from rlie.llm.parsing import (
     allowed_answers,
     append_answer_constraint,
@@ -22,9 +20,9 @@ from rlie.llm.parsing import (
     parse_prediction_response,
     should_use_responses_api,
 )
-from rlie.llm import ruleset_eval
 from rlie.utils import concurrent_config
 from rlie.llm.parse_failure_recorder import record_attempt, record_failure, record_usage
+from rlie.core.metrics import compute_accuracy_and_macro_f1
 
 
 LOGGER = logging.getLogger("rlie.rule_scorer")
@@ -105,42 +103,31 @@ class RuleScorer:
         client_cfg = config.get("client", {})
 
         base_url = client_cfg.get("base_url")
-        api_keys = client_cfg.get("api_keys") or client_cfg.get("api_key")
-        if isinstance(api_keys, str):
-            api_keys = [api_keys]
-        if not base_url or not api_keys:
+        api_key = client_cfg["api_key"].strip()
+        if not base_url or not api_key:
             raise ValueError("Remote evaluation requires client.base_url and api_key(s)")
 
         if "_concurrent_budget" not in config and "max_concurrent_per_key" in config:
             retry_overhead = float(config.get("retry_overhead", 0.15))
             self.max_concurrent = concurrent_config.calculate_total_concurrent_limit(
                 config,
-                len(api_keys),
+                1,
                 retry_overhead,
             )
             LOGGER.debug(
                 "Adjusted max_concurrent=%d to the real key count (keys=%d, retry_overhead=%.2f)",
                 self.max_concurrent,
-                len(api_keys),
+                1,
                 retry_overhead,
             )
 
         self.model = self.model_name
         self._base_url = base_url
-        if len(api_keys) == 1:
-            key = api_keys[0]
-            self.client = OpenAI(base_url=base_url, api_key=key)
-            self.async_client = AsyncOpenAI(base_url=base_url, api_key=key)
-            self._client_pool = None
-        else:
-            self._client_pool = APIClientPool(base_url, api_keys)
-            self.client = None
-            self.async_client = None
+        self.client = OpenAI(base_url=base_url, api_key=api_key)
 
         # All tasks treated as binary for parsing; not applicable will be counted as negative.
         self._use_three_state = False
         self.metric_labels = sorted({int(idx) for idx in label_mapping.values()})
-        self._use_async_remote = bool(config.get("use_async_remote", False))
 
         self._build_label_sets(label_mapping, label_values)
         logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -261,9 +248,6 @@ class RuleScorer:
         indices = list(range(total))
         results: List[int] = []
 
-        if self._use_async_remote:
-            return self._score_rule_remote(rule, samples, indices, progress_callback)
-
         if self.max_concurrent == 1:
             for idx in indices:
                 results.append(_evaluate(idx))
@@ -367,21 +351,13 @@ class RuleScorer:
 
     def _call_model(self, messages: List[Dict[str, str]]) -> str:
         backoff = self.min_backoff
+        client = self.client
         for attempt in range(1, self.max_retries + 1):
             try:
                 kwargs = {
                     "timeout": self.request_timeout,
                 }
 
-                # Pick a client by attempt: the first try uses the regular client, retries rotate keys.
-                if attempt == 1:
-                    client = self._client_pool.get_sync_client() if self._client_pool else self.client
-                else:
-                    client = (
-                        self._client_pool.get_sync_client_for_retry(attempt)
-                        if self._client_pool
-                        else self.client
-                    )
                 if self._use_responses_api:
                     kwargs.update(
                         {
@@ -499,233 +475,6 @@ class RuleScorer:
         LOGGER.warning("Model request exhausted retries; falling back to not applicable")
         return "Final answer: not applicable"
 
-    def _run_async(self, coro):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        async def _execute():
-            async with AsyncOpenAI(**self._async_client_kwargs) as client:
-                self.async_client = client
-                try:
-                    return await coro
-                finally:
-                    self.async_client = None
-
-        try:
-            result = loop.run_until_complete(_execute())
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            return result
-        finally:
-            asyncio.set_event_loop(None)
-            loop.close()
-
-    def _score_rule_remote(
-        self,
-        rule: str,
-        samples: pd.DataFrame,
-        indices: List[int],
-        progress_callback: Optional[Callable[[int], None]] = None,
-    ) -> List[int]:
-        async def _gather() -> List[int]:
-            semaphore = asyncio.Semaphore(self.max_concurrent)
-            results: List[int] = [0 for _ in indices]
-
-            async def _evaluate(position: int, row_idx: int):
-                messages = self._format_messages(rule, samples, row_idx)
-                results[position] = await self._call_and_parse_async(
-                    messages,
-                    semaphore,
-                    context={"rule": rule, "sample_idx": row_idx},
-                )
-                if progress_callback is not None:
-                    progress_callback(1)
-
-            # Sliding window: create every task up front and handle each one as it finishes.
-            tasks = [
-                asyncio.create_task(_evaluate(pos, row_idx))
-                for pos, row_idx in enumerate(indices)
-            ]
-            for coro in asyncio.as_completed(tasks):
-                await coro
-            return results
-
-        return self._run_async(_gather())
-
-    async def _call_model_async(
-        self,
-        messages: List[Dict[str, str]],
-        semaphore: asyncio.Semaphore,
-    ) -> str:
-        backoff = self.min_backoff
-        for attempt in range(1, self.max_retries + 1):
-            async with semaphore:  # Inside the loop so a failure releases the semaphore.
-                try:
-                    kwargs = {
-                        "timeout": self.request_timeout,
-                    }
-
-                    # Pick a client by attempt: the first try uses the regular client, retries rotate keys.
-                    if attempt == 1:
-                        client = self._client_pool.get_async_client() if self._client_pool else self.async_client
-                    else:
-                        client = (
-                            self._client_pool.get_async_client_for_retry(attempt)
-                            if self._client_pool
-                            else self.async_client
-                        )
-
-                    if self._use_responses_api:
-                        kwargs.update(
-                            {
-                                "model": self.model,
-                                "input": messages,
-                                "max_output_tokens": self.num_predict,
-                                "temperature": self.temperature,
-                                "store": False,
-                            }
-                        )
-                        if self._reasoning_effort:
-                            kwargs["reasoning"] = {"effort": self._reasoning_effort}
-                        response = await client.responses.create(**kwargs)
-                        content = extract_response_text(response)
-                    else:
-                        kwargs.update(
-                            {
-                                "model": self.model,
-                                "messages": messages,
-                                "temperature": self.temperature,
-                            }
-                        )
-                        extra_body = {}
-                        if self._thinking_mode is not None:
-                            extra_body["enable_thinking"] = self._thinking_mode
-                        if self._reasoning_effort:
-                            extra_body["reasoning_effort"] = self._reasoning_effort
-                        if self._chat_template_kwargs:
-                            extra_body.setdefault("chat_template_kwargs", self._chat_template_kwargs)
-                        if extra_body:
-                            kwargs["extra_body"] = extra_body
-                        response = await client.chat.completions.create(**kwargs)
-                        if not response.choices:
-                            LOGGER.error("Remote evaluation returned no choices")
-                            return "Final answer: not applicable"
-                        content = response.choices[0].message.content or ""
-                    record_usage(self.output_dir, "evaluation", getattr(response, "usage", None))
-                    # Delay between requests so a burst of concurrency does not hit API rate limits.
-                    if self.request_delay > 0:
-                        await asyncio.sleep(self.request_delay)
-                    return content
-                except (RateLimitError, APITimeoutError, APIError) as exc:
-                    if isinstance(exc, APIError) and self._maybe_toggle_thinking(exc):
-                        continue
-
-                    # Log the first failure at debug so it does not flood the log.
-                    log_func = LOGGER.debug if attempt == 1 else LOGGER.warning
-                    log_func(
-                        "Remote request failed (attempt %d/%d): %s",
-                        attempt,
-                        self.max_retries,
-                        exc,
-                    )
-                    if attempt == self.max_retries:
-                        break
-                    # Sleep after releasing the semaphore so the concurrency slot is not held.
-                except JSONDecodeError as exc:  # API returned a non-JSON response
-                    if attempt == self.max_retries:
-                        LOGGER.error(
-                            "JSON decode failed after %d attempts [async]: model=%s; error=%s; "
-                            "this usually means the API returned an error page instead of JSON; check the API service",
-                            attempt,
-                            self.model,
-                            exc,
-                        )
-                        return "Final answer: not applicable"
-
-                    # Log the first failure at debug so it does not flood the log.
-                    log_func = LOGGER.debug if attempt == 1 else LOGGER.warning
-                    log_func(
-                        "JSON decode failed (attempt %d/%d) [async]: model=%s; error=%s",
-                        attempt,
-                        self.max_retries,
-                        self.model,
-                        exc,
-                    )
-                    # JSON errors are usually transient server problems, so back off longer (sleep outside the semaphore).
-                    if attempt < self.max_retries:
-                        await asyncio.sleep(backoff * 3)
-                        backoff = min(backoff * 3, self.max_backoff)
-                        continue
-                except Exception as exc:  # pylint: disable=broad-except
-                    if attempt == self.max_retries:
-                        LOGGER.error("Unexpected remote error after %d attempts: %s", attempt, exc)
-                        return "Final answer: not applicable"
-
-                    # Log the first failure at debug so it does not flood the log.
-                    log_func = LOGGER.debug if attempt == 1 else LOGGER.warning
-                    log_func("Unexpected remote error (attempt %d/%d): %s", attempt, self.max_retries, exc)
-                    # Fall through to the sleep outside the semaphore.
-
-            # Sleep outside the semaphore so the concurrency slot is free.
-            if attempt < self.max_retries:
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, self.max_backoff)
-
-        LOGGER.error("Remote evaluation exhausted retries; returning fallback")
-        LOGGER.warning("Async model request exhausted retries; falling back to not applicable")
-        return "Final answer: not applicable"
-
-    async def _call_and_parse_async(
-        self,
-        messages: List[Dict[str, str]],
-        semaphore: asyncio.Semaphore,
-        context: Optional[Dict[str, object]] = None,
-    ) -> int:
-        record_attempt(self.output_dir, "evaluation")
-        prompt_text = json.dumps(messages, ensure_ascii=False, indent=2)
-        last_response: str = ""
-        last_error: str = ""
-        for attempt in range(1, self.max_parse_retries + 1):
-            response = await self._call_model_async(messages, semaphore)
-            last_response = response or ""
-            try:
-                return parse_prediction_response(
-                    response,
-                    self.canonical_positive,
-                    self.canonical_negative,
-                    self.positive_synonyms,
-                    self.negative_synonyms,
-                    self.neutral_synonyms,
-                )
-            except ValueError as exc:
-                last_error = str(exc)
-                if attempt >= self.max_parse_retries:
-                    LOGGER.warning(
-                        "Async parse failed after %d attempts; returning not applicable. Error: %s. Full response: %s",
-                        attempt,
-                        exc,
-                        response,
-                    )
-                    record_failure(
-                        output_dir=self.output_dir,
-                        stage="evaluation",
-                        model=self.model,
-                        attempts=attempt,
-                        error=last_error,
-                        prompt=prompt_text,
-                        response=last_response,
-                        round_idx=None,
-                        rule=(context or {}).get("rule"),
-                        sample_idx=(context or {}).get("sample_idx"),
-                    )
-                    return 0
-                LOGGER.warning(
-                    "Async parse failed (attempt %d/%d); retrying once more. Full response: %s",
-                    attempt,
-                    self.max_parse_retries,
-                    response,
-                )
-        return 0
-
     def _maybe_toggle_thinking(self, error: Exception) -> bool:
         message = str(error).lower()
         if "enable_thinking" not in message:
@@ -746,7 +495,57 @@ class RuleScorer:
         samples: pd.DataFrame,
         labels: Optional[Sequence[int]] = None,
     ) -> List[List[int]]:
-        return ruleset_eval.batch_score_serial(self, rules, samples, labels)
+        matrix: List[List[int]] = []
+        total_samples = len(samples)
+
+        if total_samples == 0:
+            if not self._disable_tqdm:
+                tqdm.write("No samples provided for scoring; skipping metrics.")
+            return [[] for _ in rules]
+
+        labels_array: Optional[List[int]] = list(labels) if labels is not None else None
+
+        for idx, rule in enumerate(rules, start=1):
+            bar_desc = f"Rule {idx}/{len(rules)}"
+            bar = tqdm(
+                total=total_samples,
+                desc=bar_desc,
+                unit="sample",
+                leave=True,
+                disable=self._disable_tqdm,
+            )
+            predictions = self.score_rule(rule, samples, progress_callback=bar.update)
+
+            if labels_array is not None:
+                effective_pairs = [
+                    (label, pred)
+                    for label, pred in zip(labels_array, predictions)
+                    if pred != 0
+                ]
+                coverage = len(effective_pairs) / len(labels_array) if labels_array else 0.0
+                if effective_pairs:
+                    y_true = [label for label, _ in effective_pairs]
+                    y_pred = [1 if pred == 1 else 0 for _, pred in effective_pairs]
+                    acc, f1 = compute_accuracy_and_macro_f1(
+                        y_true,
+                        y_pred,
+                        labels=self.metric_labels,
+                    )
+                    bar.set_postfix(
+                        {
+                            "acc": f"{acc:.3f}",
+                            "f1": f"{f1:.3f}",
+                            "cov": f"{coverage:.2f}",
+                        }
+                    )
+                else:
+                    bar.set_postfix({"acc": "nan", "f1": "nan", "cov": f"{coverage:.2f}"})
+
+            bar.close()
+            matrix.append(predictions)
+
+        return matrix
+
 
     def batch_score_parallel(
         self,
@@ -755,13 +554,109 @@ class RuleScorer:
         labels: Optional[Sequence[int]] = None,
         max_rule_workers: Optional[int] = None,
     ) -> List[List[int]]:
-        return ruleset_eval.batch_score_parallel(
-            self,
-            rules,
-            samples,
-            labels,
-            max_rule_workers=max_rule_workers,
-        )
+        if not rules or len(samples) == 0:
+            if not self._disable_tqdm and len(samples) == 0:
+                tqdm.write("No samples provided for parallel scoring; skipping.")
+            return [[] for _ in rules]
+
+        original_max_concurrent = self.max_concurrent
+        if max_rule_workers is not None:
+            rule_workers, adjusted_concurrent = max_rule_workers, original_max_concurrent
+        else:
+            rule_workers, adjusted_concurrent = concurrent_config.allocate_concurrent_budget(
+                total_limit=original_max_concurrent,
+                outer_parallelism=len(rules),
+                inner_parallelism=len(samples),
+                min_inner=5,
+            )
+
+        if rule_workers > 1:
+            self.max_concurrent = adjusted_concurrent
+            LOGGER.info(
+                "Cross-rule parallelism: %d rules x %d sample concurrency = %d actual total concurrency (budget=%d)",
+                rule_workers,
+                adjusted_concurrent,
+                rule_workers * adjusted_concurrent,
+                original_max_concurrent,
+            )
+
+        labels_array = list(labels) if labels is not None else None
+        aggregate_bar = None
+        aggregate_bar_lock = Lock()
+        if rule_workers > 1:
+            aggregate_bar = tqdm(
+                total=len(rules) * len(samples),
+                desc="Rule scoring",
+                unit="sample",
+                leave=True,
+                disable=self._disable_tqdm,
+            )
+
+        def update_aggregate_progress(increment: int = 1):
+            with aggregate_bar_lock:
+                if aggregate_bar is not None:
+                    aggregate_bar.update(increment)
+
+        def score_single_rule(args):
+            idx, rule = args
+            bar_desc = f"Rule {idx}/{len(rules)}"
+            bar = tqdm(
+                total=len(samples),
+                desc=bar_desc,
+                unit="sample",
+                leave=True,
+                disable=self._disable_tqdm or rule_workers > 1,
+            )
+
+            try:
+                progress_callback = (
+                    bar.update if aggregate_bar is None else update_aggregate_progress
+                )
+                predictions = self.score_rule(
+                    rule,
+                    samples,
+                    progress_callback=progress_callback,
+                )
+                if labels_array is not None:
+                    effective_pairs = [
+                        (label, pred)
+                        for label, pred in zip(labels_array, predictions)
+                        if pred != 0
+                    ]
+                    coverage = len(effective_pairs) / len(labels_array) if labels_array else 0.0
+                    if effective_pairs:
+                        y_true = [label for label, _ in effective_pairs]
+                        y_pred = [1 if pred == 1 else 0 for _, pred in effective_pairs]
+                        acc, f1 = compute_accuracy_and_macro_f1(
+                            y_true,
+                            y_pred,
+                            labels=self.metric_labels,
+                        )
+                        bar.set_postfix(
+                            {"acc": f"{acc:.3f}", "f1": f"{f1:.3f}", "cov": f"{coverage:.2f}"}
+                        )
+                    else:
+                        bar.set_postfix({"acc": "nan", "f1": "nan", "cov": f"{coverage:.2f}"})
+
+                return predictions
+            finally:
+                bar.close()
+
+        matrix: List[List[int]] = []
+        try:
+            if rule_workers == 1:
+                for args in enumerate(rules, start=1):
+                    matrix.append(score_single_rule(args))
+            else:
+                with ThreadPoolExecutor(max_workers=rule_workers) as executor:
+                    matrix = list(executor.map(score_single_rule, enumerate(rules, start=1)))
+        finally:
+            if aggregate_bar is not None:
+                aggregate_bar.close()
+            self.max_concurrent = original_max_concurrent
+
+        return matrix
+
 
     def batch_score(
         self,
@@ -769,29 +664,62 @@ class RuleScorer:
         samples: pd.DataFrame,
         labels: Optional[Sequence[int]] = None,
     ) -> List[List[int]]:
-        return ruleset_eval.batch_score(self, rules, samples, labels)
+        if len(rules) <= 2:
+            LOGGER.debug("Using serial scoring mode (rules=%d)", len(rules))
+            return self.batch_score_serial(rules, samples, labels)
+        LOGGER.debug("Using parallel scoring mode (rules=%d)", len(rules))
+        return self.batch_score_parallel(rules, samples, labels)
+
 
     def evaluate_rule_set(
         self,
         hypotheses: Sequence[str],
         samples: pd.DataFrame,
     ) -> List[int]:
-        return ruleset_eval.evaluate_rule_set(self, hypotheses, samples)
+        if not hypotheses:
+            return []
 
-    def _score_ruleset_remote(
-        self,
-        hypotheses: Sequence[str],
-        samples: pd.DataFrame,
-        indices: List[int],
-        progress_callback: Optional[Callable[[int], None]] = None,
-    ) -> List[int]:
-        return ruleset_eval._score_ruleset_remote(
-            self,
-            hypotheses,
-            samples,
-            indices,
-            progress_callback=progress_callback,
+        total_samples = len(samples)
+        if total_samples == 0:
+            return []
+
+        bar = tqdm(
+            total=total_samples,
+            desc="LLM Eval",
+            unit="sample",
+            leave=True,
+            disable=self._disable_tqdm,
         )
+
+        def _evaluate(row_idx: int) -> int:
+            messages = self._format_multiple_messages(hypotheses, samples, row_idx)
+            return self._call_and_parse(messages, context={"sample_idx": row_idx})
+
+        results: List[int] = []
+        try:
+            if self.max_concurrent == 1:
+                for idx in range(total_samples):
+                    results.append(_evaluate(idx))
+                    bar.update(1)
+            else:
+                with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
+                    results = [0] * total_samples
+                    future_to_pos = {
+                        executor.submit(_evaluate, idx): idx
+                        for idx in range(total_samples)
+                    }
+                    for future in as_completed(future_to_pos):
+                        pos = future_to_pos[future]
+                        try:
+                            results[pos] = future.result()
+                        except Exception:
+                            results[pos] = 0
+                        bar.update(1)
+        finally:
+            bar.close()
+
+        return results
+
 
     def evaluate_rule_set_with_label(
         self,
@@ -800,32 +728,55 @@ class RuleScorer:
         samples: pd.DataFrame,
         predicted_labels: Sequence[str],
     ) -> List[int]:
-        return ruleset_eval.evaluate_rule_set_with_label(
-            self,
-            weighted_hypotheses,
-            bias,
-            samples,
-            predicted_labels,
+        if not weighted_hypotheses or len(samples) == 0:
+            return []
+        if len(predicted_labels) != len(samples):
+            raise ValueError("Predicted labels length must match number of samples for LLM evaluation")
+
+        total_samples = len(samples)
+        bar = tqdm(
+            total=total_samples,
+            desc="LLM Eval (with label)",
+            unit="sample",
+            leave=True,
+            disable=self._disable_tqdm,
         )
 
-    def _score_ruleset_with_label_remote(
-        self,
-        weighted_hypotheses: Sequence[Tuple[str, float]],
-        bias: float,
-        samples: pd.DataFrame,
-        indices: List[int],
-        predicted_labels: Sequence[str],
-        progress_callback: Optional[Callable[[int], None]] = None,
-    ) -> List[int]:
-        return ruleset_eval._score_ruleset_with_label_remote(
-            self,
-            weighted_hypotheses,
-            bias,
-            samples,
-            indices,
-            predicted_labels,
-            progress_callback=progress_callback,
-        )
+        def _evaluate(row_idx: int) -> int:
+            messages = self._format_multiple_with_label_messages(
+                weighted_hypotheses,
+                bias,
+                samples,
+                row_idx,
+                predicted_labels[row_idx],
+            )
+            return self._call_and_parse(messages, context={"sample_idx": row_idx})
+
+        results: List[int] = []
+        try:
+            if self.max_concurrent == 1:
+                for idx in range(total_samples):
+                    results.append(_evaluate(idx))
+                    bar.update(1)
+            else:
+                with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
+                    results = [0] * total_samples
+                    future_to_pos = {
+                        executor.submit(_evaluate, idx): idx
+                        for idx in range(total_samples)
+                    }
+                    for future in as_completed(future_to_pos):
+                        pos = future_to_pos[future]
+                        try:
+                            results[pos] = future.result()
+                        except Exception:
+                            results[pos] = 0
+                        bar.update(1)
+        finally:
+            bar.close()
+
+        return results
+
 
     def evaluate_rule_set_with_linear_regression(
         self,
@@ -833,26 +784,56 @@ class RuleScorer:
         bias: float,
         samples: pd.DataFrame,
     ) -> List[int]:
-        return ruleset_eval.evaluate_rule_set_with_linear_regression(
-            self,
-            weighted_hypotheses,
-            bias,
-            samples,
+        if not weighted_hypotheses or len(samples) == 0:
+            return []
+
+        total_samples = len(samples)
+        bar = tqdm(
+            total=total_samples,
+            desc="LLM Eval (linear regression)",
+            unit="sample",
+            leave=True,
+            disable=self._disable_tqdm,
         )
 
-    def _score_ruleset_with_linear_regression_remote(
-        self,
-        weighted_hypotheses: Sequence[Tuple[str, float]],
-        bias: float,
-        samples: pd.DataFrame,
-        indices: List[int],
-        progress_callback: Optional[Callable[[int], None]] = None,
-    ) -> List[int]:
-        return ruleset_eval._score_ruleset_with_linear_regression_remote(
-            self,
-            weighted_hypotheses,
-            bias,
-            samples,
-            indices,
-            progress_callback=progress_callback,
-        )
+        def _evaluate(row_idx: int) -> int:
+            messages = self.prompt.multiple_hypotheses_inference_with_linear_regression(
+                list(weighted_hypotheses),
+                bias,
+                samples,
+                row_idx,
+            )
+            messages = append_answer_constraint(
+                messages,
+                allowed_answers(
+                    self.canonical_positive,
+                    self.canonical_negative,
+                    include_not_applicable=False,
+                ),
+            )
+            return self._call_and_parse(messages, context={"sample_idx": row_idx})
+
+        results: List[int] = []
+        try:
+            if self.max_concurrent == 1:
+                for idx in range(total_samples):
+                    results.append(_evaluate(idx))
+                    bar.update(1)
+            else:
+                with ThreadPoolExecutor(max_workers=self.max_concurrent) as executor:
+                    results = [0] * total_samples
+                    future_to_pos = {
+                        executor.submit(_evaluate, idx): idx
+                        for idx in range(total_samples)
+                    }
+                    for future in as_completed(future_to_pos):
+                        pos = future_to_pos[future]
+                        try:
+                            results[pos] = future.result()
+                        except Exception:
+                            results[pos] = 0
+                        bar.update(1)
+        finally:
+            bar.close()
+
+        return results

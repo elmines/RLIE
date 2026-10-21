@@ -10,35 +10,6 @@ from typing import Dict, List, Tuple
 LOGGER = logging.getLogger("rlie.concurrent_config")
 
 
-def extract_api_keys(client_cfg: Dict) -> List[str]:
-    """Extract the API key list from a client config.
-
-    Args:
-        client_cfg: Client config dict containing api_key or api_keys.
-
-    Returns:
-        List of API keys.
-
-    Raises:
-        ValueError: If no valid API keys are found.
-    """
-    api_keys = client_cfg.get("api_keys") or client_cfg.get("api_key")
-
-    if not api_keys:
-        raise ValueError("Client config must contain 'api_key' or 'api_keys'")
-
-    if isinstance(api_keys, str):
-        return [api_keys]
-
-    if isinstance(api_keys, (list, tuple)):
-        keys = [str(k).strip() for k in api_keys if str(k).strip()]
-        if not keys:
-            raise ValueError("API keys list is empty after filtering")
-        return keys
-
-    raise ValueError(f"Invalid api_keys type: {type(api_keys)}")
-
-
 def calculate_total_concurrent_limit(
     config: Dict,
     num_keys: int,

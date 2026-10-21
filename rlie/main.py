@@ -66,9 +66,7 @@ def run(config_path: str = "configs/default.yaml"):
         total_concurrent_limit = None
         try:
             llms_config = raw_config.get("llms", {})
-            client_cfg = llms_config.get("client", {})
-            api_keys = concurrent_config.extract_api_keys(client_cfg)
-            num_keys = len(api_keys)
+            num_keys = 1
 
             eval_config = llms_config.get("evaluation", {})
             retry_overhead = float(eval_config.get("retry_overhead", 0.15))

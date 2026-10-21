@@ -5,7 +5,6 @@ from typing import Dict, List
 
 from openai import APIError, AuthenticationError, OpenAI
 
-from rlie.llm.api_client_pool import APIClientPool
 from rlie.llm.parse_failure_recorder import record_attempt, record_failure, record_usage
 from rlie.utils.logger_config import LoggerConfig
 
@@ -93,7 +92,6 @@ class RuleGenerator:
         self.output_dir = config.get("output_dir")
 
         client_cfg = config.get("client", {})
-        request_timeout = float(config.get("request_timeout", 120))
         disable_flag = config.get("disable_thinking")
         # thinking tri-state:
         #   None  -> do not send enable_thinking
@@ -111,26 +109,21 @@ class RuleGenerator:
             self.model_name,
             bool(config.get("use_responses_api", False)),
         )
-        self._client_pool = None
 
         base_url = client_cfg.get("base_url")
-        api_keys = client_cfg.get("api_keys") or client_cfg.get("api_key")
-        if isinstance(api_keys, str):
-            api_keys = [api_keys]
-        if not base_url or not api_keys:
+        api_key = client_cfg["api_key"].strip()
+
+        if not base_url or not api_key:
             raise ValueError("Rule generation requires client.base_url and api_key(s)")
         self.model = self.model_name
-        if len(api_keys) == 1:
-            self.client = OpenAI(base_url=base_url, api_key=api_keys[0])
-        else:
-            self._client_pool = APIClientPool(base_url=base_url, api_keys=api_keys)
-            self.client = None
+        self.client = OpenAI(base_url=base_url, api_key=api_key)
 
     def generate(self, messages: List[Dict[str, str]], expected: int) -> List[str]:
         LOGGER.info("Calling remote model %s for %d expected hypotheses", self.model, expected)
         prompt_text = json.dumps(messages, ensure_ascii=False, indent=2)
         record_attempt(self.output_dir, "generation")
         last_response: str = ""
+        client = self.client
         try:
             backoff = self.min_backoff
             for attempt in range(1, self.max_retries + 1):
@@ -138,19 +131,6 @@ class RuleGenerator:
                     "timeout": self.request_timeout,
                 }
                 try:
-                    # Pick a client by attempt: the first try uses the regular client, retries rotate keys.
-                    if attempt == 1:
-                        client = (
-                            self._client_pool.get_sync_client()
-                            if self._client_pool
-                            else self.client
-                        )
-                    else:
-                        client = (
-                            self._client_pool.get_sync_client_for_retry(attempt)
-                            if self._client_pool
-                            else self.client
-                        )
                     if self._use_responses_api:
                         kwargs.update(
                             {
