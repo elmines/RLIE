@@ -2,6 +2,7 @@
 
 set -x
 ROUTER_PORT=${ROUTER_PORT:-8001}
+WORKER_URLS=($@)
 if [ -z "${WORKER_URLS[*]}" ]
 then
     WORKER_URLS=(http://0.0.0.0:8002)
