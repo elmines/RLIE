@@ -40,6 +40,7 @@ from rlie import run_eval_only
 from rlie.bert.pipeline import (
     build_mlp_bank,
     feature_description,
+    head_of,
     regression_feature_matrices,
     resolve_feature_mode,
 )
@@ -341,7 +342,7 @@ def run_single_task(
         )
 
     features, val_features = regression_feature_matrices(feature_store, mlp_bank)
-    feature_desc = feature_description(feature_mode)
+    feature_desc = feature_description(feature_mode, head_of(mlp_bank))
     LOGGER.info(
         "Round %d: training logistic regression on %d samples x %d rules (%s)",
         round_idx,
@@ -598,7 +599,7 @@ def run_single_task(
             )
 
         features, val_features = regression_feature_matrices(feature_store, mlp_bank)
-        feature_desc = feature_description(feature_mode)
+        feature_desc = feature_description(feature_mode, head_of(mlp_bank))
         LOGGER.info(
             "Round %d: training logistic regression on %d samples x %d rules (%s)",
             round_idx,

@@ -20,13 +20,16 @@ from rlie.bert.mlp import (
     _METRIC_DIRECTION,
     _TRAIN_LOCK,
     _copy_state,
+    _cross_entropy,
     _improved,
     _metric_value,
     _torch_load,
     build_rule_mlp,
+    features_from_raw,
     load_rule_mlps,
     mlp_settings,
     resolve_device,
+    rule_criterion,
 )
 from rlie.bert.templates import segments_for_frame
 from rlie.bert.weighting import build_loss_weighter, last_feedforward_parameter
@@ -60,6 +63,7 @@ def dynamic_settings(config: dict) -> dict:
         "patience": max(1, int(dynamic_cfg.get("patience", mlp_cfg["patience"]))),
         "min_delta": float(dynamic_cfg.get("min_delta", mlp_cfg["min_delta"])),
         "metric": mlp_cfg["metric"],
+        "head": mlp_cfg["head"],
         "hidden_dims": list(mlp_cfg["hidden_dims"]),
         "dropout": float(mlp_cfg["dropout"]),
         "max_length": int(dynamic_cfg.get("max_length", bert_cfg.get("max_length", 512))),
@@ -193,6 +197,7 @@ class DynamicRuleModel:
                 self.hidden_size,
                 self.settings["hidden_dims"],
                 self.settings["dropout"],
+                self.settings["head"],
             ).to(self.device)
             self._models[id(rule)] = module
             created = True
@@ -255,7 +260,9 @@ class DynamicRuleModel:
             grad_parameter,
             settings,
         )
-        loss_fn = nn.MSELoss()
+        head_name = settings["head"]
+        mse_loss = nn.MSELoss()
+        ce_loss = nn.CrossEntropyLoss()
         metric_name = settings["metric"]
         direction = _METRIC_DIRECTION[metric_name]
         use_val = silver_val is not None
@@ -273,19 +280,27 @@ class DynamicRuleModel:
         def evaluate() -> tuple[float, Dict[int, float]]:
             split_tokens = self.val_tokens if use_val else self.train_tokens
             split_targets = silver_val if use_val else silver_train
-            predictions = self._predict_matrix(split_tokens, rules)
             per_rule = {}
             values = []
-            for idx, rule in enumerate(rules):
-                value = _metric_value(predictions[:, idx], split_targets[idx], metric_name)
-                per_rule[id(rule)] = value
-                values.append(value)
+            if metric_name == "cross_entropy":
+                raw = self._predict_matrix(split_tokens, rules, as_features=False)
+                for idx, rule in enumerate(rules):
+                    value = _cross_entropy(raw[:, idx, :], split_targets[idx])
+                    per_rule[id(rule)] = value
+                    values.append(value)
+            else:
+                predictions = self._predict_matrix(split_tokens, rules)
+                for idx, rule in enumerate(rules):
+                    value = _metric_value(predictions[:, idx], split_targets[idx], metric_name)
+                    per_rule[id(rule)] = value
+                    values.append(value)
             return float(np.nanmean(values)), per_rule
 
         LOGGER.info(
-            "Joint BERT fine-tune on %d rules (%s, bert_lr=%g, mlp_lr=%g)",
+            "Joint BERT fine-tune on %d rules (%s, head=%s, bert_lr=%g, mlp_lr=%g)",
             len(rules),
             settings["strategy"],
+            head_name,
             settings["bert_learning_rate"],
             settings["mlp_learning_rate"],
         )
@@ -303,7 +318,7 @@ class DynamicRuleModel:
                 optimizer.zero_grad(set_to_none=True)
                 cls = _forward_cls(self.encoder, batch_tokens)
                 losses = [
-                    loss_fn(heads[idx](cls), batch_targets[idx])
+                    rule_criterion(heads[idx](cls), batch_targets[idx], head_name, mse_loss, ce_loss)
                     for idx in range(len(rules))
                 ]
                 if not all(torch.isfinite(loss) for loss in losses):
@@ -360,29 +375,33 @@ class DynamicRuleModel:
             float(best_metric) if best_metric is not None and np.isfinite(best_metric) else float("nan"),
         )
 
-    def _predict_matrix(self, tokens: dict, rules: Sequence) -> np.ndarray:
+    def _predict_matrix(self, tokens: dict, rules: Sequence, *, as_features: bool = True) -> np.ndarray:
         import torch
 
         sample_count = int(tokens["input_ids"].shape[0])
         if not rules:
             return np.zeros((sample_count, 0), dtype=np.float32)
         if sample_count == 0:
-            return np.zeros((0, len(rules)), dtype=np.float32)
+            width = len(rules)
+            if not as_features and self.settings["head"] == "classification":
+                return np.zeros((0, width, 3), dtype=np.float32)
+            return np.zeros((0, width), dtype=np.float32)
         self.encoder.eval()
         heads = [self._models[id(rule)] for rule in rules]
         for head in heads:
             head.eval()
         columns: List[list] = [[] for _ in rules]
         batch_size = self.settings["batch_size"]
+        head_name = self.settings["head"]
         with torch.no_grad():
             for start in range(0, sample_count, batch_size):
                 batch_tokens = _slice_tokens(tokens, slice(start, start + batch_size), self.device)
                 cls = _forward_cls(self.encoder, batch_tokens)
                 for idx, head in enumerate(heads):
-                    columns[idx].append(head(cls).detach().cpu().numpy())
-        stacked = [np.concatenate(parts) for parts in columns]
-        predictions = np.stack(stacked, axis=1).astype(np.float32, copy=False)
-        return np.clip(predictions, -1.0, 1.0)
+                    raw = head(cls).detach().cpu().numpy()
+                    columns[idx].append(features_from_raw(raw, head_name) if as_features else raw)
+        stacked = [np.concatenate(parts, axis=0) for parts in columns]
+        return np.stack(stacked, axis=1).astype(np.float32, copy=False)
 
     def save_round(self, round_idx: int, output_dir: str, rules: Sequence) -> str:
         import torch
@@ -410,6 +429,7 @@ class DynamicRuleModel:
                 "input_dim": self.hidden_size,
                 "hidden_dims": list(self.settings["hidden_dims"]),
                 "dropout": float(self.settings["dropout"]),
+                "head": self.settings["head"],
                 "metric_name": self.settings["metric"],
                 "best_metric": None
                 if metric_value is None or not np.isfinite(metric_value)
@@ -423,6 +443,7 @@ class DynamicRuleModel:
         manifest = {
             "round": int(round_idx),
             "feature_mode": "bert_dynamic",
+            "head": self.settings["head"],
             "strategy": self.settings["strategy"],
             "model_name": self.settings["model_name"],
             "max_length": self.settings["max_length"],
@@ -472,7 +493,8 @@ def predict_saved_dynamic_features(
                 batch_tokens = _slice_tokens(tokens, slice(start, start + settings["batch_size"]), device)
                 cls = _forward_cls(encoder, batch_tokens)
                 for idx, module in enumerate(modules):
-                    pieces[idx].append(module(cls).detach().cpu().numpy())
+                    raw = module(cls).detach().cpu().numpy()
+                    recorded = heads[idx].metadata.get("head") or getattr(module, "head", "regression")
+                    pieces[idx].append(features_from_raw(raw, recorded))
         columns = [np.concatenate(part) if part else np.zeros((0,), dtype=np.float32) for part in pieces]
-    predictions = np.stack(columns, axis=1).astype(np.float32, copy=False)
-    return np.clip(predictions, -1.0, 1.0)
+    return np.stack(columns, axis=1).astype(np.float32, copy=False)

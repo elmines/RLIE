@@ -32,7 +32,7 @@ from rlie.utils.eval_utils import (
 from rlie.datasets.labels import map_labels
 from rlie.llm.rule_scorer import RuleScorer
 from rlie.core.metrics import compute_accuracy_and_macro_f1
-from rlie.bert.pipeline import resolve_feature_mode
+from rlie.bert.pipeline import checkpoint_head, resolve_feature_mode
 
 
 LOGGER = LoggerConfig.get_logger("rlie.run_eval_only")
@@ -234,7 +234,13 @@ def run_eval_only(
         from rlie.bert.mlp import predict_saved_mlp_features
 
         mlp_dir = os.path.join(run_dir, "rule_mlps", f"round_{int(best_round):02d}")
-        LOGGER.info("Experiment A: using %s continuous features from %s", feature_mode, mlp_dir)
+        manifest_path = os.path.join(mlp_dir, "manifest.json")
+        saved_head = "regression"
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r", encoding="utf-8") as handle:
+                saved_head = checkpoint_head(json.load(handle))
+        feature_kind = "class labels in {-1, 0, 1}" if saved_head == "classification" else "continuous scores in [-1, 1]"
+        LOGGER.info("Experiment A: using %s %s from %s", feature_mode, feature_kind, mlp_dir)
         bert_test_features = predict_saved_mlp_features(
             config=raw_config,
             task=data_loader.task,

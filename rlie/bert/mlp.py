@@ -1,4 +1,9 @@
-"""Per-rule MLPs that map a BERT [CLS] embedding to a score in [-1, 1]."""
+"""Per-rule MLPs on a BERT [CLS] vector.
+
+``regression`` predicts a score in [-1, 1]. ``classification`` predicts three
+logits for the labels -1, 0, and 1; the logistic-regression feature is the
+argmax, written back as one of those labels.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +26,25 @@ _METRIC_DIRECTION = {
     "mse": "min",
     "mae": "min",
     "accuracy": "max",
+    "cross_entropy": "min",
 }
+_HEAD_METRICS = {
+    "regression": {"mse", "mae", "accuracy"},
+    "classification": {"accuracy", "cross_entropy"},
+}
+
+
+def resolve_head(value) -> str:
+    raw = str(value or "regression").strip().lower().replace("-", "_")
+    aliases = {
+        "regression": "regression",
+        "reg": "regression",
+        "classification": "classification",
+        "classify": "classification",
+    }
+    if raw not in aliases:
+        raise ValueError("bert.mlp.head must be 'regression' or 'classification'")
+    return aliases[raw]
 
 
 def resolve_device(spec: str):
@@ -52,20 +75,69 @@ def mlp_settings(config: Dict) -> Dict:
     mlp_cfg["max_epochs"] = max(1, int(mlp_cfg.get("max_epochs", 50)))
     mlp_cfg["patience"] = max(1, int(mlp_cfg.get("patience", 5)))
     mlp_cfg["min_delta"] = float(mlp_cfg.get("min_delta", 1e-4))
-    metric = str(mlp_cfg.get("metric", "mse")).strip().lower()
-    if metric not in _METRIC_DIRECTION:
-        raise ValueError("bert.mlp.metric must be 'mse', 'mae', or 'accuracy'")
+    head = resolve_head(mlp_cfg.get("head", "regression"))
+    default_metric = "accuracy" if head == "classification" else "mse"
+    metric = str(mlp_cfg.get("metric", default_metric)).strip().lower()
+    allowed = _HEAD_METRICS[head]
+    if metric not in allowed:
+        choices = ", ".join(sorted(allowed))
+        raise ValueError(f"bert.mlp.metric for head '{head}' must be one of: {choices}")
+    mlp_cfg["head"] = head
     mlp_cfg["metric"] = metric
     return mlp_cfg
 
 
-def build_rule_mlp(input_dim: int, hidden_dims: Sequence[int], dropout: float):
-    """Small feed-forward net ending in tanh, so every output lies in [-1, 1]."""
+def classification_index_numpy(targets: np.ndarray) -> np.ndarray:
+    """Map silver labels {-1, 0, 1} to class indices {0, 1, 2}."""
+    values = np.rint(np.asarray(targets, dtype=np.float64)).astype(np.int64).reshape(-1)
+    if values.size and not np.isin(values, (-1, 0, 1)).all():
+        raise ValueError("MLP classification targets must be -1, 0, or 1")
+    return values + 1
+
+
+def classification_index_torch(targets):
+    """Map a tensor of silver labels {-1, 0, 1} to class indices {0, 1, 2}."""
+    import torch
+
+    values = targets.round().to(dtype=torch.long)
+    if values.numel() and bool(((values < -1) | (values > 1)).any()):
+        raise ValueError("MLP classification targets must be -1, 0, or 1")
+    return values + 1
+
+
+def features_from_raw(raw: np.ndarray, head: str) -> np.ndarray:
+    """Turn a rule MLP output into the logistic-regression feature column."""
+    resolved = resolve_head(head)
+    array = np.asarray(raw)
+    if resolved == "regression":
+        return np.clip(array.reshape(-1), -1.0, 1.0).astype(np.float32, copy=False)
+    if array.ndim == 1 or array.shape[-1] != 3:
+        width = 1 if array.ndim == 1 else int(array.shape[-1])
+        raise ValueError(f"classification MLP returned {width} outputs; expected 3 logits")
+    return (np.argmax(array, axis=-1).astype(np.float32) - 1.0).reshape(-1)
+
+
+def rule_criterion(output, targets, head: str, mse_loss, ce_loss):
+    """MSE against the silver score, or cross-entropy over the three labels."""
+    if resolve_head(head) == "regression":
+        return mse_loss(output, targets)
+    return ce_loss(output, classification_index_torch(targets))
+
+
+def build_rule_mlp(input_dim: int, hidden_dims: Sequence[int], dropout: float, head: str = "regression"):
+    """Feed-forward rule head.
+
+    Regression ends in tanh so every score lies in [-1, 1]. Classification
+    returns three logits, ordered as the labels -1, 0, 1.
+    """
     from torch import nn
+
+    resolved = resolve_head(head)
 
     class _RuleMLP(nn.Module):
         def __init__(self):
             super().__init__()
+            self.head = resolved
             layers: List[nn.Module] = [nn.LayerNorm(input_dim)]
             previous = input_dim
             for hidden in hidden_dims:
@@ -74,12 +146,18 @@ def build_rule_mlp(input_dim: int, hidden_dims: Sequence[int], dropout: float):
                 if dropout > 0:
                     layers.append(nn.Dropout(dropout))
                 previous = int(hidden)
-            layers.append(nn.Linear(previous, 1))
-            layers.append(nn.Tanh())
+            if resolved == "classification":
+                layers.append(nn.Linear(previous, 3))
+            else:
+                layers.append(nn.Linear(previous, 1))
+                layers.append(nn.Tanh())
             self.backbone = nn.Sequential(*layers)
 
         def forward(self, inputs):
-            return self.backbone(inputs).squeeze(-1)
+            output = self.backbone(inputs)
+            if self.head == "classification":
+                return output
+            return output.squeeze(-1)
 
     return _RuleMLP()
 
@@ -108,7 +186,20 @@ def _metric_value(predictions: np.ndarray, targets: np.ndarray, metric: str) -> 
         return float(np.mean(np.abs(predictions - targets)))
     if metric == "accuracy":
         return _ternary_accuracy(predictions, targets)
+    if metric == "cross_entropy":
+        raise ValueError("cross_entropy is computed from logits, not from class features")
     raise ValueError(f"Unsupported MLP metric '{metric}'")
+
+
+def _cross_entropy(logits: np.ndarray, targets: np.ndarray) -> float:
+    import torch
+    import torch.nn.functional as F
+
+    if len(np.asarray(targets)) == 0:
+        return float("nan")
+    scores = torch.from_numpy(np.asarray(logits, dtype=np.float32))
+    index = torch.from_numpy(classification_index_numpy(targets))
+    return float(F.cross_entropy(scores, index).item())
 
 
 class TrainedRuleMLP:
@@ -117,10 +208,16 @@ class TrainedRuleMLP:
         self.device = device
         self.metadata = metadata
 
-    def predict(self, embeddings: np.ndarray, batch_size: int = 256) -> np.ndarray:
+    def head_name(self) -> str:
+        recorded = (self.metadata or {}).get("head") or getattr(self.model, "head", "regression")
+        return resolve_head(recorded)
+
+    def forward_numpy(self, embeddings: np.ndarray, batch_size: int = 256) -> np.ndarray:
         import torch
 
         if len(embeddings) == 0:
+            if self.head_name() == "classification":
+                return np.zeros((0, 3), dtype=np.float32)
             return np.zeros((0,), dtype=np.float32)
         self.model.eval()
         chunks: List[np.ndarray] = []
@@ -129,8 +226,12 @@ class TrainedRuleMLP:
                 batch = torch.from_numpy(np.asarray(embeddings[start : start + batch_size], dtype=np.float32))
                 batch = batch.to(self.device)
                 chunks.append(self.model(batch).detach().cpu().numpy())
-        predictions = np.concatenate(chunks).astype(np.float32, copy=False)
-        return np.clip(predictions, -1.0, 1.0)
+        return np.concatenate(chunks, axis=0)
+
+    def predict(self, embeddings: np.ndarray, batch_size: int = 256) -> np.ndarray:
+        if len(embeddings) == 0:
+            return np.zeros((0,), dtype=np.float32)
+        return features_from_raw(self.forward_numpy(embeddings, batch_size=batch_size), self.head_name())
 
 
 def _copy_state(model) -> Dict:
@@ -152,15 +253,17 @@ def train_rule_mlp(
     from torch import nn
 
     input_dim = int(embeddings.shape[1])
+    head = resolve_head(mlp_cfg.get("head", "regression"))
     torch.manual_seed(int(seed))
-    model = build_rule_mlp(input_dim, mlp_cfg["hidden_dims"], mlp_cfg["dropout"])
+    model = build_rule_mlp(input_dim, mlp_cfg["hidden_dims"], mlp_cfg["dropout"], head)
     model.to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=mlp_cfg["learning_rate"],
         weight_decay=mlp_cfg["weight_decay"],
     )
-    loss_fn = nn.MSELoss()
+    mse_loss = nn.MSELoss()
+    ce_loss = nn.CrossEntropyLoss()
     train_x = np.asarray(embeddings, dtype=np.float32)
     train_y = np.asarray(targets, dtype=np.float32).reshape(-1)
     use_val = val_embeddings is not None and val_targets is not None and len(val_embeddings) > 0
@@ -176,7 +279,9 @@ def train_rule_mlp(
     epochs_run = 0
 
     def evaluate(split_x: np.ndarray, split_y: np.ndarray) -> float:
-        holder = TrainedRuleMLP(model, device, {})
+        holder = TrainedRuleMLP(model, device, {"head": head})
+        if metric_name == "cross_entropy":
+            return _cross_entropy(holder.forward_numpy(split_x, batch_size=mlp_cfg["batch_size"]), split_y)
         predictions = holder.predict(split_x, batch_size=mlp_cfg["batch_size"])
         return _metric_value(predictions, split_y, metric_name)
 
@@ -188,7 +293,7 @@ def train_rule_mlp(
             batch_x = torch.from_numpy(train_x[chosen]).to(device)
             batch_y = torch.from_numpy(train_y[chosen]).to(device)
             optimizer.zero_grad(set_to_none=True)
-            loss = loss_fn(model(batch_x), batch_y)
+            loss = rule_criterion(model(batch_x), batch_y, head, mse_loss, ce_loss)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
@@ -223,6 +328,7 @@ def train_rule_mlp(
         "input_dim": input_dim,
         "hidden_dims": list(mlp_cfg["hidden_dims"]),
         "dropout": float(mlp_cfg["dropout"]),
+        "head": head,
         "monitored_split": "val" if use_val else "train",
     }
     LOGGER.info(
@@ -292,7 +398,7 @@ class RuleMLPBank:
         )
 
     def sync_and_predict(self, feature_store) -> tuple[np.ndarray, Optional[np.ndarray]]:
-        """Train any new rule MLPs and return sample-major features in [-1, 1]."""
+        """Train any new rule MLPs and return one logistic-regression feature per rule."""
         with _TRAIN_LOCK:
             rules = list(feature_store.rules)
             silver_train = np.asarray(feature_store.features, dtype=np.float32)
@@ -362,7 +468,12 @@ class RuleMLPBank:
             payload["metadata"]["source_round"] = int(getattr(rule, "source_round", -1))
             torch.save(payload, os.path.join(directory, f"rule_{idx:03d}.pt"))
             manifest_rules.append(payload["metadata"])
-        manifest = {"round": int(round_idx), "feature_mode": "bert_static", "rules": manifest_rules}
+        manifest = {
+            "round": int(round_idx),
+            "feature_mode": "bert_static",
+            "head": resolve_head(self.mlp_cfg.get("head", "regression")),
+            "rules": manifest_rules,
+        }
         with open(os.path.join(directory, "manifest.json"), "w", encoding="utf-8") as handle:
             json.dump(manifest, handle, ensure_ascii=False, indent=2)
         return directory
@@ -402,6 +513,7 @@ def load_rule_mlps(directory: str, device, expected_rules: Optional[Sequence[str
             int(metadata["input_dim"]),
             metadata.get("hidden_dims") or [128],
             float(metadata.get("dropout", 0.0)),
+            resolve_head(metadata.get("head", "regression")),
         )
         model.load_state_dict(payload["state_dict"])
         model.to(device)

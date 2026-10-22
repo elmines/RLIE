@@ -10,8 +10,14 @@ import pandas as pd
 import yaml
 
 from rlie.bert.embed import pool_cls, tokenizer_arguments
-from rlie.bert.mlp import _improved, build_rule_mlp, load_rule_mlps, resolve_device
-from rlie.bert.pipeline import build_mlp_bank, regression_feature_matrices, resolve_feature_mode
+from rlie.bert.mlp import _improved, build_rule_mlp, load_rule_mlps, mlp_settings, resolve_device
+from rlie.bert.pipeline import (
+    build_mlp_bank,
+    checkpoint_head,
+    feature_description,
+    regression_feature_matrices,
+    resolve_feature_mode,
+)
 from rlie.bert.store import load_embedding_index, meta_payload, save_split, write_meta
 from rlie.bert.templates import TASK_BERT_BUILDERS, headline_binary_segments, sample_key, segments_for_frame
 from rlie.core.feature_manager import RuleFeatureStore
@@ -131,6 +137,41 @@ class TestRuleMLP(unittest.TestCase):
         self.assertTrue(np.allclose(predictions, np.tanh(0.5), atol=1e-5))
         self.assertTrue(np.all((predictions > -1.0) & (predictions < 1.0)))
         self.assertFalse(np.all(np.isin(np.round(predictions, 5), [-1.0, 0.0, 1.0])))
+
+    def test_classification_features_are_argmax_labels(self):
+        torch = _require_torch()
+        from torch import nn
+
+        from rlie.bert.mlp import TrainedRuleMLP
+
+        model = build_rule_mlp(3, [], 0.0, head="classification")
+        linear = [module for module in model.modules() if isinstance(module, nn.Linear)][-1]
+        with torch.no_grad():
+            linear.weight.copy_(torch.eye(3))
+            linear.bias.zero_()
+        inputs = np.array(
+            [
+                [5.0, 0.0, 0.0],
+                [0.0, 4.0, 0.0],
+                [0.0, 0.0, 3.0],
+                [0.0, 1.0, 0.0],
+            ],
+            dtype=np.float32,
+        )
+        predictions = TrainedRuleMLP(model, torch.device("cpu"), {"head": "classification"}).predict(inputs)
+        self.assertTrue(np.array_equal(predictions, np.array([-1.0, 0.0, 1.0, 0.0], dtype=np.float32)))
+
+    def test_classification_head_rejects_regression_metrics(self):
+        settings = mlp_settings({"bert": {"mlp": {"head": "classification"}}})
+        self.assertEqual(settings["head"], "classification")
+        self.assertEqual(settings["metric"], "accuracy")
+        self.assertEqual(
+            feature_description("bert_static", "classification"),
+            "static BERT-MLP class labels in {-1, 0, 1}",
+        )
+        self.assertEqual(checkpoint_head({"rules": []}), "regression")
+        with self.assertRaises(ValueError):
+            mlp_settings({"bert": {"mlp": {"head": "classification", "metric": "mse"}}})
 
     def test_pool_cls_uses_position_zero(self):
         torch = _require_torch()

@@ -209,6 +209,39 @@ class TestDynamicFineTune(unittest.TestCase):
         self.assertTrue(torch.allclose(captured["mlp"], sentinel_mlp))
         self.assertIn(id(store.rules[1]), bank._models)
 
+    def test_classification_features_are_discrete_labels(self):
+        torch = _require_torch()
+        settings = dynamic_settings(
+            {
+                "bert": {
+                    "mlp": {"head": "classification", "hidden_dims": [8], "dropout": 0.0},
+                    "dynamic": {
+                        "strategy": "adaptive_weighting",
+                        "bert_learning_rate": 1e-3,
+                        "mlp_learning_rate": 1e-2,
+                        "max_epochs": 1,
+                        "patience": 1,
+                        "batch_size": 8,
+                    },
+                }
+            }
+        )
+        self.assertEqual(settings["head"], "classification")
+        self.assertEqual(settings["metric"], "accuracy")
+        bank = DynamicRuleModel(
+            _tiny_bert(torch),
+            _tokens(torch, 12),
+            _tokens(torch, 6),
+            torch.device("cpu"),
+            settings,
+            seed=0,
+        )
+        train_features, _ = bank.sync_and_predict(_store(12, 6, ["first rule", "second rule"]))
+        self.assertEqual(train_features.shape, (12, 2))
+        self.assertTrue(set(np.unique(train_features)).issubset({-1.0, 0.0, 1.0}))
+        logits = next(iter(bank._models.values()))(torch.zeros(4, bank.hidden_size))
+        self.assertEqual(tuple(logits.shape), (4, 3))
+
     def test_gradnorm_step_on_shared_feedforward_weight(self):
         torch = _require_torch()
         try:

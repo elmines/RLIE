@@ -1,4 +1,4 @@
-"""Choose LLM ternary features or continuous BERT-MLP features."""
+"""Choose LLM ternary features or BERT-MLP features."""
 
 from __future__ import annotations
 
@@ -30,12 +30,37 @@ def resolve_feature_mode(config: dict) -> str:
     return _FEATURE_MODES[raw]
 
 
-def feature_description(mode: str) -> str:
-    if mode == "bert_dynamic":
-        return "fine-tuned BERT-MLP scores in [-1, 1]"
-    if mode == "bert_static":
-        return "static BERT-MLP scores in [-1, 1]"
-    return "LLM ternary scores"
+def feature_description(mode: str, head: str = "regression") -> str:
+    if mode == "llm":
+        return "LLM ternary scores"
+    kind = "fine-tuned" if mode == "bert_dynamic" else "static"
+    if head == "classification":
+        return f"{kind} BERT-MLP class labels in {{-1, 0, 1}}"
+    return f"{kind} BERT-MLP scores in [-1, 1]"
+
+
+def head_of(mlp_bank) -> str:
+    """Return the MLP head used by a rule bank. LLM mode has no bank."""
+    if mlp_bank is None:
+        return "regression"
+    from rlie.bert.mlp import resolve_head
+
+    cfg = getattr(mlp_bank, "mlp_cfg", None)
+    if cfg is None:
+        cfg = getattr(mlp_bank, "settings", None) or {}
+    return resolve_head(cfg.get("head", "regression"))
+
+
+def checkpoint_head(manifest: dict) -> str:
+    """Head recorded in a saved round. Older checkpoints are regression."""
+    from rlie.bert.mlp import resolve_head
+
+    if manifest.get("head"):
+        return resolve_head(manifest["head"])
+    rules = manifest.get("rules") or []
+    if rules and rules[0].get("head"):
+        return resolve_head(rules[0]["head"])
+    return "regression"
 
 
 def build_mlp_bank(config: dict, task, task_root: str, train_df, val_df):
@@ -55,8 +80,8 @@ def build_mlp_bank(config: dict, task, task_root: str, train_df, val_df):
 def regression_feature_matrices(feature_store, mlp_bank) -> tuple[np.ndarray, Optional[np.ndarray]]:
     """Sample-major features for logistic regression.
 
-    LLM mode uses the ternary silver labels. Both BERT modes use continuous
-    scores in [-1, 1], without a decision threshold.
+    LLM mode uses the ternary silver labels. BERT regression uses continuous
+    scores in [-1, 1]. BERT classification uses the argmax label in {-1, 0, 1}.
     """
     if mlp_bank is None:
         train = feature_store.to_sample_feature_matrix()
