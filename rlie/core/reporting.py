@@ -1,5 +1,5 @@
 import json
-import logging
+from rlie.utils.logger_config import LoggerConfig
 import os
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 
-LOGGER = logging.getLogger("rlie.core.reporting")
+LOGGER = LoggerConfig.get_logger("rlie.core.reporting")
 
 
 def save_json(path: str, payload):

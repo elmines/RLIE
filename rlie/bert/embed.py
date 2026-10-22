@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import logging
+from rlie.utils.logger_config import LoggerConfig
 import os
 from typing import Dict, List, Optional, Sequence
 
@@ -16,7 +16,7 @@ from rlie.bert.templates import sample_key, segments_for_frame
 from rlie.datasets.tasks import BaseTask
 
 
-LOGGER = logging.getLogger("rlie.bert.embed")
+LOGGER = LoggerConfig.get_logger("rlie.bert.embed")
 
 
 def load_split_frame(data_dir: str, relative_path: str) -> pd.DataFrame:

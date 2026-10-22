@@ -1,6 +1,6 @@
 import copy
 import json
-import logging
+from rlie.utils.logger_config import LoggerConfig
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -13,7 +13,7 @@ from rlie.core.metrics import compute_accuracy_and_macro_f1
 from rlie.utils import concurrent_config
 
 
-LOGGER = logging.getLogger("rlie.eval_utils")
+LOGGER = LoggerConfig.get_logger("rlie.eval_utils")
 
 
 def save_json(path: str, payload) -> None:

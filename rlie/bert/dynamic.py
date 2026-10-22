@@ -8,7 +8,7 @@ own loss term, combined by the configured weighting strategy.
 from __future__ import annotations
 
 import json
-import logging
+from rlie.utils.logger_config import LoggerConfig
 import os
 from typing import Dict, List, Optional, Sequence
 
@@ -31,7 +31,7 @@ from rlie.bert.templates import segments_for_frame
 from rlie.bert.weighting import build_loss_weighter, last_feedforward_parameter
 
 
-LOGGER = logging.getLogger("rlie.bert.dynamic")
+LOGGER = LoggerConfig.get_logger("rlie.bert.dynamic")
 
 
 def dynamic_settings(config: dict) -> dict:

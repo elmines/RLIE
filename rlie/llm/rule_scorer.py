@@ -10,6 +10,7 @@ import pandas as pd
 from openai import APIError, OpenAI
 from tqdm import tqdm
 
+from rlie.utils.logger_config import LoggerConfig
 from rlie.llm.prompt import BasePrompt
 from rlie.datasets.data_loader import _normalize_label
 from rlie.llm.parsing import (
@@ -25,7 +26,7 @@ from rlie.llm.parse_failure_recorder import record_attempt, record_failure, reco
 from rlie.core.metrics import compute_accuracy_and_macro_f1
 
 
-LOGGER = logging.getLogger("rlie.rule_scorer")
+LOGGER = LoggerConfig.get_logger("rlie.rule_scorer")
 
 
 class RuleScorer:
@@ -130,11 +131,11 @@ class RuleScorer:
         self.metric_labels = sorted({int(idx) for idx in label_mapping.values()})
 
         self._build_label_sets(label_mapping, label_values)
-        logging.getLogger("httpx").setLevel(logging.WARNING)
-        logging.getLogger("httpcore").setLevel(logging.WARNING)
+        LoggerConfig.get_logger("httpx").setLevel(logging.WARNING)
+        LoggerConfig.get_logger("httpcore").setLevel(logging.WARNING)
         for logger_name in ("openai", "openai._base_client", "openai._http"):
-            logging.getLogger(logger_name).setLevel(logging.WARNING)
-            logging.getLogger(logger_name).propagate = False
+            LoggerConfig.get_logger(logger_name).setLevel(logging.WARNING)
+            LoggerConfig.get_logger(logger_name).propagate = False
 
         LOGGER.info(
             "Rule checker initialized with remote model %s (max_concurrent=%d)",

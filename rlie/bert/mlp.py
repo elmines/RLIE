@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import logging
+from rlie.utils.logger_config import LoggerConfig
 import os
 import threading
 from copy import deepcopy
@@ -14,7 +14,7 @@ import numpy as np
 from rlie.bert.store import embedding_dir_for_task, load_embedding_index
 
 
-LOGGER = logging.getLogger("rlie.bert.mlp")
+LOGGER = LoggerConfig.get_logger("rlie.bert.mlp")
 _TRAIN_LOCK = threading.Lock()
 
 _METRIC_DIRECTION = {

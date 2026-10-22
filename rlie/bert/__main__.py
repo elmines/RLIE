@@ -13,7 +13,7 @@ Example::
 from __future__ import annotations
 
 import argparse
-import logging
+from rlie.utils.logger_config import LoggerConfig
 import os
 import sys
 
@@ -24,8 +24,7 @@ from rlie.bert.embed import embed_task
 from rlie.datasets.data_loader import TaskDataLoader, load_config
 
 
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
-LOGGER = logging.getLogger("rlie.bert")
+LOGGER = LoggerConfig.get_logger("rlie.bert")
 
 
 def _task_roots(config: dict, requested: list[str] | None) -> list[str]:

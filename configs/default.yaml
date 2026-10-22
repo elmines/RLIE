@@ -23,13 +23,19 @@ best_model_metric: acc
 # bert_dynamic: fine-tune BERT together with one MLP per rule. Later rounds keep
 #   the BERT weights and any MLP already trained for a rule.
 # feature_mode: llm
-feature_mode: bert_static
+feature_mode: bert_dynamic
 
 bert:
-  embeddings_dir: embeddings/modbert
-  model_name: answerdotai/ModernBERT-base
-  max_length: 8192
+  # embeddings_dir: embeddings/modbert
+  # model_name: answerdotai/ModernBERT-base
+  # max_length: 8192
+
+  embeddings_dir: embeddings/bert
+  model_name: google-bert/bert-base-cased
+  max_length: 512
+
   batch_size: 16
+
   device: cuda:0
   # Rule MLPs run here. Point this at a GPU that is not serving the LLM.
   mlp_device: cuda:0

@@ -1,4 +1,4 @@
-import logging
+from rlie.utils.logger_config import LoggerConfig
 import os
 import re
 from pathlib import Path
@@ -35,7 +35,7 @@ class TaskDataLoader:
     """Wrapper around BaseTask to expose full datasets based on config."""
 
     def __init__(self, config: Dict):
-        self.logger = logging.getLogger("rlie.datasets.data_loader")
+        self.logger = LoggerConfig.get_logger("rlie.datasets.data_loader")
 
         task_config_path = self._resolve_task_config_path(config)
         config.setdefault("task_config", task_config_path)

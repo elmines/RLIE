@@ -14,14 +14,14 @@ in that task's ``task.yaml`` to use the default segment template.
 from __future__ import annotations
 
 import hashlib
-import logging
+from rlie.utils.logger_config import LoggerConfig
 import math
 from typing import Callable, Dict, List, Sequence
 
 import pandas as pd
 
 
-LOGGER = logging.getLogger("rlie.bert.templates")
+LOGGER = LoggerConfig.get_logger("rlie.bert.templates")
 
 BertBuilder = Callable[[pd.Series], List[str]]
 TASK_BERT_BUILDERS: Dict[str, BertBuilder] = {}

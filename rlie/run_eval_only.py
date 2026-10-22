@@ -2,7 +2,7 @@ import argparse
 import copy
 import glob
 import json
-import logging
+from rlie.utils.logger_config import LoggerConfig
 import os
 import re
 import sys
@@ -35,8 +35,7 @@ from rlie.core.metrics import compute_accuracy_and_macro_f1
 from rlie.bert.pipeline import resolve_feature_mode
 
 
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
-LOGGER = logging.getLogger("rlie.run_eval_only")
+LOGGER = LoggerConfig.get_logger("rlie.run_eval_only")
 
 
 def _parse_repeat_index(run_dir: str, fallback: int = 0) -> int:

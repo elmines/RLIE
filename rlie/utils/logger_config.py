@@ -7,7 +7,7 @@ class LoggerConfig:
 
     @staticmethod
     def setup_logger(
-        level=logging.DEBUG,
+        level=logging.INFO,
         log_file_path=None,
     ):
         LoggerConfig.level = level
@@ -32,12 +32,12 @@ class LoggerConfig:
 
         if log_file_path is not None:
             file_handler = logging.FileHandler(log_file_path)
-            file_handler.setLevel(logging.DEBUG)
+            file_handler.setLevel(level)
             file_handler.setFormatter(file_formatter)
             handlers.append(file_handler)
 
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.DEBUG)
+        console_handler.setLevel(level)
         console_handler.setFormatter(console_formatter)
         handlers.append(console_handler)
 

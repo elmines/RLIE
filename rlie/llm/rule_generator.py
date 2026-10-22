@@ -1,5 +1,5 @@
 import json
-import logging
+from rlie.utils.logger_config import LoggerConfig
 import time
 from typing import Dict, List
 
@@ -9,7 +9,7 @@ from rlie.llm.parse_failure_recorder import record_attempt, record_failure, reco
 from rlie.utils.logger_config import LoggerConfig
 
 
-LOGGER = logging.getLogger("rlie.generation")
+LOGGER = LoggerConfig.get_logger("rlie.generation")
 GENERATION_LOGGER_NAME = "RLIE - Generation"
 
 

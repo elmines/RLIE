@@ -1,6 +1,5 @@
 import argparse
 import copy
-import logging
 import os
 import sys
 from collections import defaultdict
@@ -17,17 +16,14 @@ if __package__ is None or __package__ == "":
 
 from rlie.datasets.data_loader import load_config
 from rlie.core.task_runner import (
-    _set_global_info_enabled,
     run_single_task,
     save_json,
 )
 from rlie.utils import concurrent_config, eval_utils
 
 
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
-LOGGER = logging.getLogger("rlie")
+LOGGER = LoggerConfig.get_logger("rlie")
 
-LoggerConfig.setup_logger()
 
 
 def run(config_path: str = "configs/default.yaml"):

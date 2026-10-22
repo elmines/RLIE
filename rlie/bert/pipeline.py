@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import logging
+from rlie.utils.logger_config import LoggerConfig
 from typing import Optional
 
 import numpy as np
 
 
-LOGGER = logging.getLogger("rlie.bert.pipeline")
+LOGGER = LoggerConfig.get_logger("rlie.bert.pipeline")
 _WARNED_ALIAS = False
 
 _FEATURE_MODES = {

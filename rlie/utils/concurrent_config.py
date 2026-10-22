@@ -3,11 +3,11 @@
 Provides a single way to compute concurrency limits and allocate a budget
 across nested parallel work.
 """
-import logging
+from rlie.utils.logger_config import LoggerConfig
 from typing import Dict, List, Tuple
 
 
-LOGGER = logging.getLogger("rlie.concurrent_config")
+LOGGER = LoggerConfig.get_logger("rlie.concurrent_config")
 
 
 def calculate_total_concurrent_limit(

@@ -1,5 +1,5 @@
 import copy
-import logging
+from rlie.utils.logger_config import LoggerConfig
 import os
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -45,8 +45,7 @@ from rlie.bert.pipeline import (
 )
 
 
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
-LOGGER = logging.getLogger("rlie")
+LOGGER = LoggerConfig.get_logger("rlie")
 
 
 
@@ -91,17 +90,6 @@ def _capture_rule_store(
         "val_features": val_features,
     }
 
-
-def _set_global_info_enabled(enabled: bool) -> None:
-    level = logging.INFO if enabled else logging.WARNING
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-    for handler in root_logger.handlers:
-        handler.setLevel(level)
-    if LoggerConfig.console_handler is not None:
-        LoggerConfig.console_handler.setLevel(level)
-    if LoggerConfig.file_handler is not None:
-        LoggerConfig.file_handler.setLevel(level)
 
 def run_single_task(
     config: Dict,
