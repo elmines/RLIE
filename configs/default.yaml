@@ -60,7 +60,8 @@ bert:
   # Used only when feature_mode is bert_dynamic. BERT and the rule MLPs have
   # separate learning rates. strategy is adaptive_weighting or gradnorm.
   dynamic:
-    strategy: adaptive_weighting
+    # strategy: adaptive_weighting
+    strategy: gradnorm
     bert_learning_rate: 0.00002
     mlp_learning_rate: 0.001
     weight_decay: 0.0001
