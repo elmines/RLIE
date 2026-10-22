@@ -12,4 +12,4 @@ $RUN_PREFIX env VLLM_SERVER_DEV_MODE=1 CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICE
     --max-model-len $((1 << 14)) \
     --max-num-seqs 16 \
     --max-num-batched-tokens $((1 << 13)) \
-    --gpu-memory-utilization 0.85
+    --gpu-memory-utilization 0.50
