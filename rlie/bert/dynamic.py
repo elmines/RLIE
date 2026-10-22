@@ -13,6 +13,7 @@ import os
 from typing import Dict, List, Optional, Sequence
 
 import numpy as np
+from tqdm import tqdm
 
 from rlie.bert.embed import pool_cls, tokenizer_arguments
 from rlie.bert.mlp import (
@@ -288,12 +289,14 @@ class DynamicRuleModel:
             settings["bert_learning_rate"],
             settings["mlp_learning_rate"],
         )
-        for epoch in range(settings["max_epochs"]):
+        epoch_inds = list(range(settings["max_epochs"]))
+        for epoch in tqdm(epoch_inds, desc="BERT training epochs"):
             self.encoder.train()
             for head in heads:
                 head.train()
             order = torch.randperm(silver_train.shape[1], generator=generator)
-            for start in range(0, silver_train.shape[1], settings["batch_size"]):
+            batch_starts = list(range(0, silver_train.shape[1], settings["batch_size"]))
+            for start in tqdm(batch_starts, desc='BERT training batches'):
                 chosen = order[start : start + settings["batch_size"]]
                 batch_tokens = _slice_tokens(self.train_tokens, chosen, self.device)
                 batch_targets = train_targets[:, chosen].to(self.device)
