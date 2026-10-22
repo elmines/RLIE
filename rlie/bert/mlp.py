@@ -76,7 +76,7 @@ def mlp_settings(config: Dict) -> Dict:
     mlp_cfg["patience"] = max(1, int(mlp_cfg.get("patience", 5)))
     mlp_cfg["min_delta"] = float(mlp_cfg.get("min_delta", 1e-4))
     head = resolve_head(mlp_cfg.get("head", "regression"))
-    default_metric = "accuracy" if head == "classification" else "mse"
+    default_metric = "cross_entropy" if head == "classification" else "mse"
     metric = str(mlp_cfg.get("metric", default_metric)).strip().lower()
     allowed = _HEAD_METRICS[head]
     if metric not in allowed:

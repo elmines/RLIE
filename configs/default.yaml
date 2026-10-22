@@ -43,7 +43,7 @@ bert:
     # regression: one score in [-1, 1] (metric mse, mae, or accuracy).
     # classification: 3 logits; the logistic-regression feature is the argmax
     #   mapped to {-1, 0, 1} (metric accuracy or cross_entropy).
-    head: regression
+    head: classification
     hidden_dims: [128]
     dropout: 0.1
     learning_rate: 0.001
@@ -52,7 +52,11 @@ bert:
     max_epochs: 50
     patience: 5
     min_delta: 0.0001
-    metric: mse
+
+    # Right now have to manually change this with the 'head' field
+    # Easier to let it get set the default for the head type
+    # metric: mse
+
   # Used only when feature_mode is bert_dynamic. BERT and the rule MLPs have
   # separate learning rates. strategy is adaptive_weighting or gradnorm.
   dynamic:
