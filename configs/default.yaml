@@ -24,8 +24,8 @@ best_model_metric: acc
 #   the BERT weights and any MLP already trained for a rule.
 # After an llm run, train BERT on the retained hypotheses with:
 #   python -m rlie.train_retained --config configs/default.yaml --run-dir <run>
-# feature_mode: llm
-feature_mode: bert_dynamic
+feature_mode: llm
+# feature_mode: bert_dynamic
 
 # Paths are relative to the working directory. BERT, the rule-MLP head, and the
 # logistic-regression hyperparameters live in their own files.

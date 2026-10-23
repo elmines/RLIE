@@ -223,10 +223,11 @@ def load_retained_store(
     label_column: str,
 ) -> Tuple[RuleFeatureStore, pd.DataFrame, Optional[pd.DataFrame], int]:
     chosen, _mode, payload = _load_round_payload(run_dir, round_id)
+    chosen = int(chosen)
     entries = list(payload.get("rules") or [])
     train_df, val_df, reloaded = _frames_for_run(run_dir, config, task_root, repeat_index)
     train_labels, train_matrix = read_round_feature_csv(
-        os.path.join(run_dir, f"round_{chosen:02d}_train_dataset.csv")
+        os.path.join(run_dir, f"round_{chosen}_train_dataset.csv")
     )
     if not reloaded:
         _labels_match(train_df, train_labels, label_mapping, label_column)
@@ -237,7 +238,7 @@ def load_retained_store(
     val_matrix = None
     if val_df is not None:
         val_labels, val_matrix = read_round_feature_csv(
-            os.path.join(run_dir, f"round_{chosen:02d}_val_dataset.csv")
+            os.path.join(run_dir, f"round_{chosen}_val_dataset.csv")
         )
         if not reloaded:
             _labels_match(val_df, val_labels, label_mapping, label_column)
