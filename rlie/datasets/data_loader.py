@@ -251,15 +251,73 @@ class TaskDataLoader:
         return pos_label, neg_label
 
 
-def load_config(path: str) -> Dict:
-    def expand_env(value):
-        if isinstance(value, str):
-            return os.path.expandvars(value)
-        if isinstance(value, list):
-            return [expand_env(item) for item in value]
-        if isinstance(value, dict):
-            return {key: expand_env(item) for key, item in value.items()}
-        return value
+def expand_env(value):
+    if isinstance(value, str):
+        return os.path.expandvars(value)
+    if isinstance(value, list):
+        return [expand_env(item) for item in value]
+    if isinstance(value, dict):
+        return {key: expand_env(item) for key, item in value.items()}
+    return value
 
-    with open(path, "r") as f:
-        return expand_env(yaml.safe_load(f))
+
+def _resolve_config_reference(path: str, base_dir: str) -> str:
+    expanded = os.path.expandvars(str(path))
+    if os.path.isabs(expanded):
+        return expanded
+    cwd_candidate = os.path.abspath(expanded)
+    if os.path.exists(cwd_candidate):
+        return cwd_candidate
+    beside = os.path.abspath(os.path.join(base_dir, expanded))
+    if os.path.exists(beside):
+        return beside
+    return cwd_candidate
+
+
+def apply_external_configs(config: Dict, source_path: Optional[str] = None) -> Dict:
+    """Inline bert_config, head_config, and sklearn_config when those paths are set.
+
+    Referenced files are the mappings themselves, not wrapped in another key.
+    A path is resolved against the working directory first, then beside the
+    config file that named it.
+    """
+    merged = dict(config or {})
+    base_dir = os.path.dirname(os.path.abspath(source_path)) if source_path else os.getcwd()
+    references = (
+        ("bert_config", "bert"),
+        ("head_config", "mlp"),
+        ("sklearn_config", "elastic_net"),
+    )
+    for key, destination in references:
+        ref = merged.get(key)
+        if not ref:
+            continue
+        path = _resolve_config_reference(str(ref), base_dir)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"{key} '{ref}' was not found at {path}")
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = yaml.safe_load(handle) or {}
+        if not isinstance(payload, dict):
+            raise ValueError(f"{key} file {path} must be a mapping")
+        payload = expand_env(payload)
+        if destination == "bert":
+            existing = merged.get("bert") if isinstance(merged.get("bert"), dict) else {}
+            bert = dict(payload)
+            if "mlp" not in bert and existing.get("mlp"):
+                bert["mlp"] = existing["mlp"]
+            merged["bert"] = bert
+        elif destination == "mlp":
+            bert = dict(merged.get("bert") or {})
+            bert["mlp"] = payload
+            merged["bert"] = bert
+        else:
+            merged["elastic_net"] = payload
+    return merged
+
+
+def load_config(path: str) -> Dict:
+    with open(path, "r", encoding="utf-8") as handle:
+        loaded = yaml.safe_load(handle) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"Config file {path} must be a mapping")
+    return apply_external_configs(expand_env(loaded), path)

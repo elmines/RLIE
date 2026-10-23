@@ -22,54 +22,16 @@ best_model_metric: acc
 #   Embed first with: python -m rlie.bert --config configs/default.yaml
 # bert_dynamic: fine-tune BERT together with one MLP per rule. Later rounds keep
 #   the BERT weights and any MLP already trained for a rule.
+# After an llm run, train BERT on the retained hypotheses with:
+#   python -m rlie.train_retained --config configs/default.yaml --run-dir <run>
 # feature_mode: llm
 feature_mode: bert_dynamic
 
-bert:
-  # embeddings_dir: embeddings/modbert
-  # model_name: answerdotai/ModernBERT-base
-  # max_length: 8192
-
-  embeddings_dir: embeddings/bert
-  model_name: google-bert/bert-base-cased
-  max_length: 512
-
-  batch_size: 16
-
-  device: cuda:0
-  # Rule MLPs run here. Point this at a GPU that is not serving the LLM.
-  mlp_device: cuda:0
-  mlp:
-    # regression: one score in [-1, 1] (metric mse, mae, or accuracy).
-    # classification: 3 logits; the logistic-regression feature is the argmax
-    #   mapped to {-1, 0, 1} (metric accuracy or cross_entropy).
-    head: classification
-    hidden_dims: [128]
-    dropout: 0.1
-    learning_rate: 0.001
-    weight_decay: 0.0001
-    batch_size: 64
-    max_epochs: 50
-    patience: 5
-    min_delta: 0.0001
-
-    # Right now have to manually change this with the 'head' field
-    # Easier to let it get set the default for the head type
-    # metric: mse
-
-  # Used only when feature_mode is bert_dynamic. BERT and the rule MLPs have
-  # separate learning rates. strategy is adaptive_weighting or gradnorm.
-  dynamic:
-    # strategy: adaptive_weighting
-    strategy: gradnorm
-    bert_learning_rate: 0.00002
-    mlp_learning_rate: 0.001
-    weight_decay: 0.0001
-    batch_size: 8
-    max_epochs: 10
-    patience: 3
-    gradnorm_learning_rate: 0.0001
-    gradnorm_alpha: 0.0
+# Paths are relative to the working directory. BERT, the rule-MLP head, and the
+# logistic-regression hyperparameters live in their own files.
+bert_config: configs/bert.yaml
+head_config: configs/head.yaml
+sklearn_config: configs/elastic_net.yaml
 
 evaluation:
   modes: regression_only
@@ -100,16 +62,6 @@ convergence:
   min_improvement: 0.001
   max_rounds: 20
   patience: 3
-
-elastic_net:
-  max_iter: 20000
-  tol: 0.001
-  fit_intercept: true
-  warm_start: false
-  class_weight: balanced
-  random_state: 42
-  cv_folds: 5
-  n_jobs: -1
 
 logging:
   output_dir: outputs

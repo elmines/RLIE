@@ -1,0 +1,15 @@
+# One rule MLP. regression scores lie in [-1, 1].
+# classification emits 3 logits; the logistic-regression feature is the argmax
+# mapped to {-1, 0, 1}.
+#
+# metric defaults to mse for regression and cross_entropy for classification.
+# regression also accepts mae or accuracy. classification also accepts accuracy.
+head: classification
+hidden_dims: [128]
+dropout: 0.1
+learning_rate: 0.001
+weight_decay: 0.0001
+batch_size: 64
+max_epochs: 50
+patience: 5
+min_delta: 0.0001

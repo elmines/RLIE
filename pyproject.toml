@@ -37,6 +37,7 @@ explicit = true
 rlie-train = "rlie.main:main"
 rlie-eval = "rlie.run_eval_only:main"
 rlie-embed = "rlie.bert.__main__:main"
+rlie-train-retained = "rlie.train_retained:main"
 
 [tool.setuptools.packages.find]
 include = ["rlie*"]

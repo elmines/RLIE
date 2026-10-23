@@ -1,0 +1,28 @@
+# Encoder and joint-training settings. The rule MLP itself is configs/head.yaml.
+# embeddings_dir: embeddings/modbert
+# model_name: answerdotai/ModernBERT-base
+# max_length: 8192
+
+embeddings_dir: embeddings/bert
+model_name: google-bert/bert-base-cased
+max_length: 512
+
+batch_size: 16
+
+device: cuda:0
+# Rule MLPs run here. Point this at a GPU that is not serving the LLM.
+mlp_device: cuda:0
+
+# Used only when feature_mode is bert_dynamic. BERT and the rule MLPs have
+# separate learning rates. strategy is adaptive_weighting or gradnorm.
+dynamic:
+  # strategy: adaptive_weighting
+  strategy: gradnorm
+  bert_learning_rate: 0.00002
+  mlp_learning_rate: 0.001
+  weight_decay: 0.0001
+  batch_size: 8
+  max_epochs: 10
+  patience: 3
+  gradnorm_learning_rate: 0.0001
+  gradnorm_alpha: 0.0

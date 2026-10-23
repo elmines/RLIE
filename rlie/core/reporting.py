@@ -16,6 +16,32 @@ def save_json(path: str, payload):
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
+def save_run_samples(output_dir: str, train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame) -> str:
+    """Write the exact frames used for a run so a later BERT fit sees the same rows."""
+    directory = os.path.join(output_dir, "samples")
+    os.makedirs(directory, exist_ok=True)
+    for name, frame in (("train", train_df), ("val", val_df), ("test", test_df)):
+        if frame is None:
+            continue
+        frame.to_json(os.path.join(directory, f"{name}.json"), orient="records", force_ascii=False)
+    return directory
+
+
+def load_run_samples(output_dir: str) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    directory = os.path.join(output_dir, "samples")
+
+    def _read(name: str) -> Optional[pd.DataFrame]:
+        path = os.path.join(directory, f"{name}.json")
+        if not os.path.exists(path):
+            return None
+        frame = pd.read_json(path)
+        if frame.empty and name != "train":
+            return frame
+        return frame
+
+    return _read("train"), _read("val"), _read("test")
+
+
 def save_dataset_csv(features: np.ndarray, labels: Sequence[int], path: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if features.size == 0:

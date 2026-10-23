@@ -22,6 +22,7 @@ from rlie.core.reporting import (
     save_dataset_csv,
     save_json,
     save_rule_snapshot,
+    save_run_samples,
     should_update_best_snapshot,
 )
 from rlie.core.rule_utils import (
@@ -208,6 +209,7 @@ def run_single_task(
     train_df = dataset.train.reset_index(drop=True)
     val_df = dataset.val.reset_index(drop=True)
     test_df = dataset.test.reset_index(drop=True)
+    save_run_samples(final_output_dir, train_df, val_df, test_df)
 
     feature_store = RuleFeatureStore(
         samples=train_df,

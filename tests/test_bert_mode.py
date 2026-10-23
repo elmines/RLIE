@@ -164,7 +164,7 @@ class TestRuleMLP(unittest.TestCase):
     def test_classification_head_rejects_regression_metrics(self):
         settings = mlp_settings({"bert": {"mlp": {"head": "classification"}}})
         self.assertEqual(settings["head"], "classification")
-        self.assertEqual(settings["metric"], "accuracy")
+        self.assertEqual(settings["metric"], "cross_entropy")
         self.assertEqual(
             feature_description("bert_static", "classification"),
             "static BERT-MLP class labels in {-1, 0, 1}",

@@ -1,0 +1,9 @@
+# scikit-learn logistic regression used on the rule features.
+max_iter: 20000
+tol: 0.001
+fit_intercept: true
+warm_start: false
+class_weight: balanced
+random_state: 42
+cv_folds: 5
+n_jobs: -1

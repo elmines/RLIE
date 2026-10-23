@@ -227,7 +227,7 @@ class TestDynamicFineTune(unittest.TestCase):
             }
         )
         self.assertEqual(settings["head"], "classification")
-        self.assertEqual(settings["metric"], "accuracy")
+        self.assertEqual(settings["metric"], "cross_entropy")
         bank = DynamicRuleModel(
             _tiny_bert(torch),
             _tokens(torch, 12),
