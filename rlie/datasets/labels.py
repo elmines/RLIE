@@ -141,6 +141,26 @@ def dreaddit_extract_label(text):
     return "other"
 
 
+@extract_label_register.register("vast")
+def vast_extract_label(text):
+    logger = _logger()
+    if text is None:
+        logger.warning("Could not extract label from empty text")
+        return "other"
+    answer = _last_match(
+        [
+            r"final answer:\s*(favor|favour|against|pro|con|not applicable|other)\b",
+        ],
+        text.lower(),
+    )
+    if answer in {"favor", "favour", "pro"}:
+        return "FAVOR"
+    if answer in {"against", "con"}:
+        return "AGAINST"
+    logger.warning("Could not extract label from text: %s", text)
+    return "other"
+
+
 @extract_label_register.register("paper_citation")
 def paper_citation_extract_label(text):
     logger = _logger()

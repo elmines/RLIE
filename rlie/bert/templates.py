@@ -106,6 +106,12 @@ def llamagc_detect_segments(row: pd.Series) -> List[str]:
     return [_text(row, "story")]
 
 
+@register_bert_template("vast", ("post", "topic"))
+def vast_segments(row: pd.Series) -> List[str]:
+    """[CLS] post [SEP] topic [SEP]"""
+    return [_text(row, "post"), _text(row, "topic")]
+
+
 def resolve_builder(task) -> BertBuilder:
     """Return the segment builder for a task, preferring a registered function."""
     builder = TASK_BERT_BUILDERS.get(task.task_name)

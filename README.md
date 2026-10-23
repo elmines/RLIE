@@ -189,7 +189,7 @@ Useful fields:
 
 ## Tasks
 
-This release currently supports exactly six tasks:
+This release currently supports these tasks:
 
 - `real/headline_binary`
 - `real/deceptive_reviews`
@@ -197,6 +197,7 @@ This release currently supports exactly six tasks:
 - `real/llamagc_detect`
 - `real/persuasive_pairs`
 - `real/retweet`
+- `real/vast`
 
 Tasks are selected through `data_roots`:
 
@@ -209,7 +210,7 @@ data_roots:
 
 Each task identifier maps to a task definition under `rlie/task_specs/` plus raw JSON data under `data/`. Each task definition is split into `task.yaml`, `prompts.yaml`, and `metadata.json`.
 
-If you want to switch tasks, replace the `data_roots` entries with any subset of the six supported identifiers above.
+If you want to switch tasks, replace the `data_roots` entries with any subset of the supported identifiers above. VAST ships as raw CSVs; build its JSON with `python -m rlie.datasets.prepare_vast` before selecting `real/vast`.
 
 ## Smoke Test
 

@@ -1,0 +1,135 @@
+observations:
+  multi_content: |
+    Topic: ${topic}
+    Comment: "${post}"
+    Stance: ${label}
+batched_generation:
+  system: |-
+    You study how people express stance in online comments.
+    Given comments and the topic each comment is about, generate hypotheses that help decide whether the writer is in FAVOR of the topic or AGAINST it.
+    The comment and the topic may use different wording, so attend to whether the writer supports or opposes the topic, not merely whether the topic is mentioned.
+
+    Using the given examples, propose ${num_hypotheses} hypotheses.
+    These hypotheses should identify specific patterns that occur across the provided comments.
+
+    Each hypothesis should contain both of the following:
+    a. A pattern that makes a comment more likely to be in FAVOR of the topic
+    b. The opposite pattern that makes a comment more likely to be AGAINST the topic
+
+    Generate them in the format of 1. [hypothesis], 2. [hypothesis], ... ${num_hypotheses}. [hypothesis].
+  user: |-
+    We have seen some comments and their topics:
+    ${observations}
+
+    Please generate hypotheses that are useful for deciding whether a comment is in FAVOR of or AGAINST its topic.
+    Propose ${num_hypotheses} possible hypotheses. Generate them in the format of 1. [hypothesis], 2. [hypothesis], ... ${num_hypotheses}. [hypothesis].
+    Proposed hypotheses:
+batched_generation_refine:
+  system: |-
+    You study how people express stance in online comments.
+    Given misclassified comments and prior hypotheses, propose ${num_hypotheses} new, more accurate hypotheses about whether the writer is in FAVOR of the topic or AGAINST it.
+    These hypotheses should identify specific patterns that occur across the provided comments.
+
+    Each hypothesis should contain both of the following:
+    a. A pattern that makes a comment more likely to be in FAVOR of the topic
+    b. The opposite pattern that makes a comment more likely to be AGAINST the topic
+
+    Generate them in the format of 1. [hypothesis], 2. [hypothesis], ... ${num_hypotheses}. [hypothesis].
+  user: |-
+    We have comments that the previous hypotheses got wrong:
+    ${observations}
+
+    Here are some of the prior hypotheses for reference:
+    ${hypotheses_text}
+
+    Please generate new hypotheses to improve predictions of whether a comment is in FAVOR of or AGAINST its topic.
+    You may refine the previous hypotheses (like tightening conditions, adding exceptions, or rephrasing), or introduce new hypotheses to cover new, distinct angles when prior ones are insufficient or misaligned.
+
+    Propose ${num_hypotheses} possible hypotheses.
+    Generate them in the format of 1. [hypothesis], 2. [hypothesis], ... ${num_hypotheses}. [hypothesis].
+    Proposed hypotheses:
+inference:
+  system: |-
+    You study how people express stance in online comments.
+    From past experience, you learned a pattern.
+    Decide whether that pattern applies to a new comment, and whether the writer is in FAVOR of the topic or AGAINST it.
+    Give an answer. Respond with exactly one of: FAVOR, AGAINST, or not applicable.
+    Give your final answer in the format of {Final answer: FAVOR}, {Final answer: AGAINST}, or {Final answer: not applicable}.
+  user: |-
+    Learned pattern: ${hypothesis}
+    Topic: ${topic}
+    Comment: "${post}"
+
+    Given the pattern you learned above, predict the writer's stance toward the topic.
+
+    You can:
+    1. Consider if the pattern can be applied to this comment and topic.
+    2. Based on the pattern, is the writer in FAVOR of the topic or AGAINST it? It is also fine if the pattern does not apply.
+
+    Please give your final answer in the format of {Final answer: FAVOR}, {Final answer: AGAINST}, or {Final answer: not applicable}.
+multiple_hypotheses_inference:
+  system: |-
+    You study how people express stance in online comments.
+    From past experience, you learned some patterns.
+    Determine which patterns apply to the current comment, and predict whether the writer is in FAVOR of the topic or AGAINST it.
+    Give your final answer in the format of {Final answer: FAVOR} or {Final answer: AGAINST}.
+  user: |-
+    Our learned patterns: ${hypotheses}
+    Topic: ${topic}
+    Comment: "${post}"
+
+    Given the patterns you learned above, predict the writer's stance toward the topic.
+
+    You can:
+    1. Think about which patterns can be applied to this comment and topic.
+    2. Based on the applicable patterns, is the writer in FAVOR of the topic or AGAINST it?
+
+    Please give your final answer in the format of {Final answer: FAVOR} or {Final answer: AGAINST}.
+multiple_hypotheses_inference_with_linear_regression:
+  system: |-
+    You study how people express stance in online comments.
+    We trained a linear regression model on the training set to obtain a collection of weighted patterns plus a bias term. The learned weight reflects how strongly the pattern contributes to predicting FAVOR versus AGAINST.
+    Review the weighted patterns and consider how the bias interacts with them.
+    Give your final answer in the format of {Final answer: FAVOR} or {Final answer: AGAINST}.
+  user: |-
+    Our learned weighted patterns (the weight's magnitude reflects the pattern's importance):
+    ${weighted_hypotheses}
+
+    Bias term (a constant offset added regardless of pattern activations; a positive bias means the model is overall more inclined toward ${pos_label}, while a negative bias leans toward ${neg_label}):
+    ${bias}
+
+    Topic: ${topic}
+    Comment: "${post}"
+
+    Given the patterns you learned above, predict the writer's stance toward the topic.
+
+    You can:
+    1. Think about which patterns can be applied to this comment and topic.
+    2. Decide whether the writer is in FAVOR of the topic or AGAINST it. You can use the weighted patterns and bias as a reference.
+
+    Please give your final answer in the format of {Final answer: FAVOR} or {Final answer: AGAINST}.
+multiple_hypotheses_inference_with_linear_regression_and_label:
+  system: |-
+    You study how people express stance in online comments.
+    We trained a linear regression model on the training set to obtain a collection of weighted patterns plus a bias term. The learned weight reflects how strongly the pattern contributes to predicting FAVOR versus AGAINST. The regression model also outputs a referenced label, which should be treated as a suggestion.
+    Review the weighted patterns, consider how the bias interacts with them, and use the regression model's suggested label as a reference.
+    Give your final answer in the format of {Final answer: FAVOR} or {Final answer: AGAINST}.
+  user: |-
+    Our learned weighted patterns (the weight's magnitude reflects the pattern's importance):
+    ${weighted_hypotheses}
+
+    Bias term (a constant offset added regardless of pattern activations; a positive bias means the model is overall more inclined toward ${pos_label}, while a negative bias leans toward ${neg_label}):
+    ${bias}
+
+    Topic: ${topic}
+    Comment: "${post}"
+
+    The regression model suggested stance: ${model_prediction}
+
+    Given the patterns you learned above, predict the writer's stance toward the topic.
+
+    You can:
+    1. Think about which patterns can be applied to this comment and topic.
+    2. Decide whether the writer is in FAVOR of the topic or AGAINST it. You can use the weighted patterns, bias, and suggested label as a reference.
+
+    Please give your final answer in the format of {Final answer: FAVOR} or {Final answer: AGAINST}.

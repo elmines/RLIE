@@ -2,7 +2,7 @@
 
 This directory contains the raw dataset files bundled with the RLIE release.
 
-The current release includes data for exactly six tasks:
+The current release includes data for these tasks:
 
 - `real/headline_binary`
 - `real/deceptive_reviews`
@@ -10,6 +10,7 @@ The current release includes data for exactly six tasks:
 - `real/llamagc_detect`
 - `real/persuasive_pairs`
 - `real/retweet`
+- `real/vast` (raw CSVs; build the JSON with `python -m rlie.datasets.prepare_vast`)
 
 Task definitions, prompt templates, and task metadata live under
 `rlie/task_specs/`.
