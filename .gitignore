@@ -8,7 +8,6 @@ venv/
 
 outputs/
 embeddings/
-logs/
 *.log
 parse_failures/
 parse_failures.jsonl
