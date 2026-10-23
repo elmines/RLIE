@@ -6,7 +6,8 @@ original ``post`` text. The topic is the crowdsourced ``new_topic``, falling
 back to ``ori_topic`` and then ``topic_str``.
 
 The bundled release has ``vast_train.csv`` and ``vast_dev.csv``. ``vast_test.csv``
-is converted too when it is present.
+is converted too when it is present. Train and dev also get stratified short
+files, 500 and 200 rows, drawn with seed 0 so each class keeps its source share.
 
 Example::
 
@@ -17,9 +18,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+from collections import Counter
 from typing import Dict, Iterable, Optional
 
+import numpy as np
 import pandas as pd
 
 
@@ -28,6 +32,11 @@ SPLIT_OUTPUTS = {
     "vast_dev.csv": "vast_dev.json",
     "vast_test.csv": "vast_test.json",
 }
+SHORT_OUTPUTS = {
+    "vast_train.csv": ("vast_train_short.json", 500),
+    "vast_dev.csv": ("vast_dev_short.json", 200),
+}
+SHORT_SEED = 0
 
 
 def canonical_label(value) -> Optional[str]:
@@ -107,6 +116,54 @@ def convert_frame(frame: pd.DataFrame) -> tuple[dict, dict]:
     return payload, counts
 
 
+def class_allocation(labels: Iterable[str], size: int) -> Dict[str, int]:
+    """Give each class a share of ``size`` that matches its share of ``labels``.
+
+    Counts use the largest-remainder method, so they sum to ``size`` and stay
+    within the number of rows available for each class.
+    """
+    counts = Counter(labels)
+    total = sum(counts.values())
+    if size >= total:
+        return dict(counts)
+    raw = {label: size * counts[label] / total for label in counts}
+    allocation = {label: min(counts[label], math.floor(raw[label])) for label in counts}
+    leftover = size - sum(allocation.values())
+    order = sorted(counts, key=lambda label: (raw[label] - math.floor(raw[label]), label), reverse=True)
+    while leftover > 0:
+        progressed = False
+        for label in order:
+            if leftover <= 0:
+                break
+            if allocation[label] < counts[label]:
+                allocation[label] += 1
+                leftover -= 1
+                progressed = True
+        if not progressed:
+            break
+    return allocation
+
+
+def sample_payload(payload: dict, size: int, seed: int = SHORT_SEED) -> dict:
+    """Sample ``size`` rows without replacement, preserving class proportions."""
+    labels = list(payload["label"])
+    if size >= len(labels):
+        return {key: list(values) for key, values in payload.items()}
+    allocation = class_allocation(labels, size)
+    by_class: Dict[str, list] = {}
+    for index, label in enumerate(labels):
+        by_class.setdefault(label, []).append(index)
+    generator = np.random.default_rng(seed)
+    chosen = []
+    for label in sorted(by_class):
+        pool = np.asarray(by_class[label], dtype=int)
+        picked = generator.choice(pool, size=allocation[label], replace=False)
+        chosen.append(np.asarray(picked, dtype=int))
+    selected = np.concatenate(chosen)
+    generator.shuffle(selected)
+    return {key: [values[int(index)] for index in selected] for key, values in payload.items()}
+
+
 def write_split(payload: dict, path: str) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
@@ -128,6 +185,19 @@ def convert_directory(input_dir: str, output_dir: Optional[str] = None) -> Dict[
         output_path = os.path.join(destination, output_name)
         write_split(payload, output_path)
         counts["output"] = output_path
+        short = SHORT_OUTPUTS.get(source_name)
+        if short is not None:
+            short_name, short_size = short
+            short_payload = sample_payload(payload, short_size, SHORT_SEED)
+            short_path = os.path.join(destination, short_name)
+            write_split(short_payload, short_path)
+            short_counts = Counter(short_payload["label"])
+            counts["short"] = {
+                "output": short_path,
+                "kept": len(short_payload["label"]),
+                "favor": int(short_counts["FAVOR"]),
+                "against": int(short_counts["AGAINST"]),
+            }
         written[source_name] = counts
         print(
             f"{source_name}: kept {counts['kept']} "
@@ -135,6 +205,13 @@ def convert_directory(input_dir: str, output_dir: Optional[str] = None) -> Dict[
             f"dropped {counts['dropped_nonpolar']} non-polar and {counts['dropped_empty']} empty "
             f"-> {output_path}"
         )
+        if "short" in counts:
+            short_counts = counts["short"]
+            print(
+                f"  short: {short_counts['kept']} "
+                f"(FAVOR {short_counts['favor']}, AGAINST {short_counts['against']}) "
+                f"-> {short_counts['output']}"
+            )
     if not found:
         expected = ", ".join(SPLIT_OUTPUTS)
         raise FileNotFoundError(f"No VAST CSV files in {input_dir}. Expected one of: {expected}")

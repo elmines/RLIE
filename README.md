@@ -198,6 +198,7 @@ This release currently supports these tasks:
 - `real/persuasive_pairs`
 - `real/retweet`
 - `real/vast`
+- `real/vast_short`
 
 Tasks are selected through `data_roots`:
 
@@ -210,7 +211,7 @@ data_roots:
 
 Each task identifier maps to a task definition under `rlie/task_specs/` plus raw JSON data under `data/`. Each task definition is split into `task.yaml`, `prompts.yaml`, and `metadata.json`.
 
-If you want to switch tasks, replace the `data_roots` entries with any subset of the supported identifiers above. VAST ships as raw CSVs; build its JSON with `python -m rlie.datasets.prepare_vast` before selecting `real/vast`.
+If you want to switch tasks, replace the `data_roots` entries with any subset of the supported identifiers above. VAST ships as raw CSVs; build its JSON with `python -m rlie.datasets.prepare_vast` before selecting `real/vast`. `real/vast_short` uses the 500/200 stratified subsets written by that same command.
 
 ## Smoke Test
 

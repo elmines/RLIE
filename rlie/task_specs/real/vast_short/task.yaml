@@ -1,0 +1,10 @@
+task_name: vast
+# Smoke-test subset of VAST. Same task as real/vast, with the short JSON files.
+data_dir: ../../../../data/real/vast
+train_data_path: ./vast_train_short.json
+val_data_path: ./vast_dev_short.json
+test_data_path: ./vast_dev_short.json
+prompts_path: ../vast/prompts.yaml
+bert_input:
+  # Encoded as [CLS] post [SEP] topic [SEP]
+  fields: [post, topic]

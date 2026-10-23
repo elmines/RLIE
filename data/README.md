@@ -11,6 +11,7 @@ The current release includes data for these tasks:
 - `real/persuasive_pairs`
 - `real/retweet`
 - `real/vast` (raw CSVs; build the JSON with `python -m rlie.datasets.prepare_vast`)
+- `real/vast_short` (500 train / 200 dev rows from that same command)
 
 Task definitions, prompt templates, and task metadata live under
 `rlie/task_specs/`.

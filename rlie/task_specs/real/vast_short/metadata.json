@@ -1,0 +1,29 @@
+{
+    "task_name": "VAST",
+    "task_type": "classification",
+    "task_description": "Smoke-test subset of VAST. Predict whether a comment is in favor of or against a given topic. Neutral comments are excluded so the task is binary.",
+    "features": {
+        "post": {
+            "type": "text",
+            "description": "Original comment text from the VAST dataset."
+        },
+        "topic": {
+            "type": "text",
+            "description": "Topic the comment is judged against, preferring the crowdsourced topic."
+        }
+    },
+    "labels": {
+        "label": {
+            "type": "binary",
+            "values": ["FAVOR", "AGAINST"],
+            "description": "FAVOR is the positive class (VAST label 1, pro). AGAINST is the negative class (VAST label 0, con)."
+        }
+    },
+    "dataset_sizes": {
+        "train": 500,
+        "validation": 200,
+        "test": 200
+    },
+    "known_hypotheses": [
+    ]
+}

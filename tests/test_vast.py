@@ -10,7 +10,7 @@ import yaml
 
 from rlie.bert.templates import TASK_BERT_BUILDERS, vast_segments
 from rlie.datasets.labels import vast_extract_label
-from rlie.datasets.prepare_vast import canonical_label, convert_directory, convert_frame
+from rlie.datasets.prepare_vast import canonical_label, class_allocation, convert_directory, convert_frame, sample_payload
 
 
 class TestVastPreprocess(unittest.TestCase):
@@ -51,8 +51,27 @@ class TestVastPreprocess(unittest.TestCase):
             self.assertEqual(set(written), {"vast_train.csv"})
             with open(os.path.join(tmp, "vast_train.json"), encoding="utf-8") as handle:
                 payload = json.load(handle)
+            with open(os.path.join(tmp, "vast_train_short.json"), encoding="utf-8") as handle:
+                short = json.load(handle)
         self.assertEqual(payload["label"], ["FAVOR", "AGAINST"])
         self.assertEqual(len(payload["post"]), len(payload["topic"]))
+        self.assertEqual(short["label"], ["FAVOR", "AGAINST"])
+
+    def test_short_sample_keeps_source_class_shares(self):
+        labels = ["FAVOR"] * 7 + ["AGAINST"] * 3
+        self.assertEqual(class_allocation(labels, 5), {"FAVOR": 4, "AGAINST": 1})
+        payload = {
+            "post": [f"p{index}" for index in range(10)],
+            "topic": [f"t{index}" for index in range(10)],
+            "label": labels,
+        }
+        first = sample_payload(payload, 5, seed=0)
+        second = sample_payload(payload, 5, seed=0)
+        self.assertEqual(first, second)
+        self.assertEqual(len(first["label"]), 5)
+        self.assertEqual(first["label"].count("FAVOR"), 4)
+        self.assertEqual(first["label"].count("AGAINST"), 1)
+        self.assertEqual(len(set(first["post"])), 5)
 
     def test_task_template_and_label_parser(self):
         specs = os.path.join(os.path.dirname(__file__), "..", "rlie", "task_specs", "real", "vast", "task.yaml")
